@@ -4,7 +4,7 @@ import {Project} from "./enhancedTypes";
 import {DesignConcept} from "./types";
 
 const KEY="roommuse.project.v2",LEGACY="roommuse.concept";
-const API_URL=process.env.EXPO_PUBLIC_API_URL;
+const API_URL=process.env.EXPO_PUBLIC_API_URL??(typeof window!=="undefined"?`${window.location.protocol}//${window.location.hostname}:8787`:undefined);
 
 async function request(path:string,init?:RequestInit){
   if(!API_URL)return undefined;

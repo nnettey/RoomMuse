@@ -1,7 +1,8 @@
 import { demoConcept } from "./data";
 import { DesignConcept, DesignStyle } from "./types";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "";
+const API_URL = process.env.EXPO_PUBLIC_API_URL ??
+  (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8787` : "");
 
 export async function createDesign(photoBase64: string | undefined, style: DesignStyle): Promise<DesignConcept> {
   if (!photoBase64) {
