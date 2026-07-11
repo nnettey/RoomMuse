@@ -1,0 +1,43 @@
+{
+  "name": "roommuse",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.19.4"
+  },
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "start:tunnel": "expo start --tunnel",
+    "typecheck": "tsc --noEmit",
+    "server": "node server/server.mjs",
+    "test": "npm run test:unit",
+    "build:web": "expo export --platform web --output-dir dist",
+    "test:unit": "tsc -p tsconfig.test.json && node .test-dist/tests/domain.test.js && node .test-dist/tests/integration.test.js",
+    "test:e2e": "npm run build:web && playwright test e2e/roommuse.spec.ts",
+    "test:visual": "npm run build:web && playwright test e2e/visual.spec.ts",
+    "test:all": "npm run test:unit && npm run test:e2e && npm run test:visual"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~6.1.2",
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~54.0.0",
+    "expo-camera": "~17.0.0",
+    "expo-image-manipulator": "~14.0.8",
+    "expo-image-picker": "~17.0.0",
+    "expo-keep-awake": "~15.0.8",
+    "expo-linear-gradient": "~15.0.0",
+    "expo-status-bar": "~3.0.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.4",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/react": "~19.1.10",
+    "typescript": "~5.9.2"
+  }
+}

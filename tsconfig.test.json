@@ -1,0 +1,25 @@
+{
+    "compilerOptions":  {
+                            "target":  "ES2020",
+                            "module":  "CommonJS",
+                            "moduleResolution":  "Node",
+                            "strict":  true,
+                            "esModuleInterop":  true,
+                            "skipLibCheck":  true,
+                            "outDir":  ".test-dist",
+                            "noEmit":  false
+                        },
+    "include":  [
+                    "src/types.ts",
+                    "src/data.ts",
+                    "src/enhancedTypes.ts",
+                    "src/enhancedData.ts",
+                    "src/domain.ts",
+                    "src/analytics.ts",
+                    "src/featureFlags.ts",
+                    "tests/**/*.ts"
+                ],
+    "exclude":  [
+                    "node_modules"
+                ]
+}

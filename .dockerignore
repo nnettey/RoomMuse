@@ -1,0 +1,14 @@
+.git
+.env
+.expo
+.certs
+.test-dist
+dist
+dist-web
+node_modules
+storage
+test-results*
+screenshots
+logs
+*.log
+

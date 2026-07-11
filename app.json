@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "RoomMuse",
+    "slug": "roommuse",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "roommuse",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.roommuse.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "RoomMuse uses your camera to capture the room you want to redesign.",
+        "NSPhotoLibraryUsageDescription": "RoomMuse lets you choose room photos for a design concept."
+      }
+    },
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "Allow RoomMuse to scan and photograph your room." }],
+      ["expo-image-picker", { "photosPermission": "Allow RoomMuse to select a room photo." }]
+    ]
+  }
+}

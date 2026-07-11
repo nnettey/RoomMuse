@@ -1,0 +1,30 @@
+name: roommuse
+
+services:
+  studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: roommuse/studio:local
+    container_name: roommuse-studio
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: 8787
+      ROOMMUSE_DATA_DIR: /var/lib/roommuse
+    ports:
+      - "8787:8787"
+    volumes:
+      - roommuse_data:/var/lib/roommuse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8787/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  roommuse_data:
+    name: roommuse_data
+
