@@ -339,6 +339,7 @@ dependencies, test expectations, definition of done, and required handoff inform
 | R7 | RM-1 camera may be an HTTPS/origin issue misread as a code bug | Medium | Reproduce before changing code (D14); `scripts/serve_https.py` already exists |
 | R8 | Project payloads embed base64 images; the 50 MB cap and AsyncStorage limits are untested at 3 photos × N projects | Medium | WS-4 measures payload size and moves images to `/designs/`-style references if needed |
 | R9 | Retailer allowlist of 11 domains may starve some categories | Low | Widen deliberately in WS-2, keeping the direct-product-URL rule intact |
+| R10 | **The e2e suite is already red at `baseline/pre-v2` — 6 failed / 3 passed** (measured, see COORDINATION.md §10). The cause is a stale spec whose locators no longer match the app's current labels, not broken behaviour. Until it is repaired, WS-2..WS-5 have **no working end-to-end regression net** and §6's gating strategy has no teeth. | **High** | Repair the spec before the parallel workstreams start, not at the end. Repair = updating stale locators to the app's current intentional labels, justified line by line in COORDINATION.md — explicitly *not* loosening assertions (REQ-13) |
 
 ## 9. Assumptions
 

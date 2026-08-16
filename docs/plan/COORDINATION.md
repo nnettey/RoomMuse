@@ -121,6 +121,9 @@ table and post a §8 handoff note naming every affected workstream.
 | Date | WS | Event |
 |---|---|---|
 | 2026-08-16 | — | Repository inspected. Baseline measured: `typecheck` clean, `test:unit` 11/11 pass, tree clean at `2379fb2`. Plan committed. |
+| 2026-08-16 | WS-0 | `baseline/pre-v2` tagged at `2379fb2`; `roommuse-v2/integration` cut; `ws/0-stabilize` branched. |
+| 2026-08-16 | WS-0 | D1/D10/D11/D12 fixed (commit `cf839a4`). `src/runtimeEnv.ts` added; `typecheck` clean, `test:unit` 16/16. |
+| 2026-08-16 | WS-0 | e2e baseline established **and it is red**: 6 failed / 3 passed, identical on `baseline/pre-v2` and on `ws/0-stabilize`. Stale spec, not a regression. See §10 and risk R10. |
 
 ---
 
@@ -128,7 +131,13 @@ table and post a §8 handoff note naming every affected workstream.
 
 | WS | File | Change | Merged? |
 |---|---|---|---|
-| _(fill in as work lands)_ | | | |
+| WS-0 | `src/runtimeEnv.ts` (new) | Safe browser-global access: `API_BASE_URL` + `demoRoute()`. Never throws on React Native. | Not yet |
+| WS-0 | `src/RoomMuseApp.tsx` | D1 P0 crash: `window.location.search` → `demoRoute()`. One import added. **No other change** — file passes to WS-5. | Not yet |
+| WS-0 | `src/assetUrl.ts`, `src/designService.ts`, `src/persistence.ts` | D12: three duplicated API-URL definitions (port 8787) replaced by the shared `API_BASE_URL` (port 3201). | Not yet |
+| WS-0 | `src/ProjectScreens.tsx` | D10: 3× U+FFFD and 2× ASCII-substituted glyphs restored. Character fixes only. | Not yet |
+| WS-0 | `App.tsx` | D11: ~135 lines of never-rendered duplicate UI removed; re-export retained. | Not yet |
+| WS-0 | `scripts/start-roommuse.ps1` | D12: reads `.env`, exports `EXPO_PUBLIC_API_URL`, prints which source it used. | Not yet |
+| WS-0 | `tests/runtime.test.ts` (new), `package.json` | 5 tests pinning demo-route detection on every runtime shape. **`package.json` script line touched — noted for WS-6 (§8).** | Not yet |
 
 ---
 
@@ -138,7 +147,9 @@ Format: `[date] WS-x → WS-y — request/blocker — status`
 
 | Entry | Status |
 |---|---|
-| _(none yet)_ | |
+| [2026-08-16] WS-0 → WS-6 — WS-0 added one line to `package.json` `test:unit` to run `tests/runtime.test.ts`. `package.json` is WS-6-owned; recording rather than asking, since WS-6 has not started. | Informational |
+| [2026-08-16] WS-0 → WS-6 — **The e2e suite is red at baseline (§10).** It cannot gate WS-2..WS-5 until repaired. Recommend pulling the spec repair forward ahead of the parallel workstreams instead of leaving it to WS-6. **Awaiting user decision.** | **Open — blocking the gating strategy** |
+| [2026-08-16] WS-0 → WS-5 — `src/RoomMuseApp.tsx` and `src/ProjectScreens.tsx` are released to WS-5. WS-0 changed only the crash guard and the corrupted characters; no layout, copy, or behaviour was altered. | Ready |
 
 ---
 
@@ -159,13 +170,30 @@ Mirrors `PLAN.md` §10; update here as they resolve.
 
 ## 10. Test status
 
-| Gate | Baseline (2026-08-16) | Current |
+| Gate | Baseline at `baseline/pre-v2` (measured 2026-08-16) | Current (`ws/0-stabilize`) |
 |---|---|---|
 | `npm run typecheck` | Pass | Pass |
-| `npm run test:unit` | Pass 11/11 | Pass 11/11 |
-| `npm run test:e2e` | **Not yet run** — WS-0 must establish this | — |
-| `npm run test:visual` | **Not yet run** — WS-0 must establish this | — |
+| `npm run test:unit` | Pass 11/11 | Pass 16/16 (5 added) |
+| `npm run test:e2e` | **FAIL — 6 failed / 3 passed** (measured on the untouched baseline tag) | FAIL — 6 failed / 3 passed, **identical set: no regression from WS-0** |
+| `npm run test:visual` | Not run — blocked behind the red e2e suite | — |
 | `npm run test:live` (manual, real key) | Does not exist yet — WS-2 | — |
+
+### The e2e regression net is red at baseline — read this before relying on it
+
+Verified by checking out `baseline/pre-v2` and running the suite there: the same 6 tests fail, so this
+predates all v2 work. The cause is a **stale spec**, not broken behaviour — the app gained features and
+`e2e/roommuse.spec.ts` was never updated:
+
+| Stale locator in the spec | What the app actually renders | Failures caused |
+|---|---|---|
+| `getByRole("button", {name: "Choose a photo instead"})` | `"Choose a photo or video instead"` (`EnhancedScreens.tsx:97`) — changed when video capture was added. `getByRole` name matching is substring-based, and the old string is not a substring of the new one. | 4 |
+| `getByRole("button", {name: "View saved shopping plan"})` | `"Open saved decor project"` or `"Continue reviewing design"` — `RoomMuseApp.tsx` always passes `resumeLabel` explicitly, so the default is now unreachable. The same test also assumes Back from Shopping returns Home, but the route map sends it to the project hub (`shopping:"project"`). | 1 |
+| Not yet root-caused: `comparison, report, quantities, owned, remove, restore and undo remain functional` (`/?demo=result`) | — | 1 |
+
+**Consequence:** WS-2 through WS-5 currently have no working end-to-end regression net. Repairing the spec is
+therefore a prerequisite for the gating strategy in `PLAN.md` §6, not end-of-project cleanup — see risk R10.
+Repair means **updating stale locators to the app's current intentional labels**, which is not the same as
+weakening an assertion. Every such change must be justified line by line in this document.
 
 ---
 
