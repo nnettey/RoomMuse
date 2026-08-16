@@ -9,6 +9,10 @@ export type Item=LegacyConcept["shoppingItems"][number]&{conceptId?:string;image
 export type RoomAnalysis={roomType:string;proportions:string;focalPoints:string[];lighting:string;retainedElements:string[];circulation:string;confidence:string};
 export type Report={designDirection:string;layoutAndCirculation:string;colorAndMaterials:string;lighting:string;scaleAndProportion:string;retainedElements:string;priorityChanges:{highestImpact:string[];nextBest:string[];optional:string[]};designerNotes:string[]};
 export type Concept=Omit<LegacyConcept,"shoppingItems">&{conceptId:string;conceptName:ConceptName;conceptDescription:string;materials:string[];layoutSummary:string;roomAnalysis?:RoomAnalysis;designReport:Report;shoppingItems:Item[];generationStatus:"complete"|"partial"|"failed";generatedAt:string;revisionNotes?:string[]};
-export type Project={projectId:string;roomName?:string;sourceImages:{uri:string;base64?:string}[];selectedStyle?:Style;concepts:Concept[];selectedConceptId?:string;chosenConceptId?:string;approvedConceptId?:string;comparisonPosition:number;priorityFilter:Filter;sortPreference:Sort;createdAt:string;updatedAt:string};
+export type BudgetTier="save"|"balanced"|"invest";
+export type FieldFind={id:string;image:{uri:string;base64?:string};notes:string;verdict:"considering"|"fits"|"replace"|"pass";targetItemId?:string;advice:string;createdAt:string};
+export type ProgressUpdate={id:string;image:{uri:string;base64?:string};note:string;guidance:string;createdAt:string};
+export type Deal={id:string;itemId:string;title:string;retailer:string;price:number;originalPrice:number;url:string;checkedAt:string};
+export type Project={projectId:string;roomName?:string;sourceImages:{uri:string;base64?:string}[];selectedStyle?:Style;concepts:Concept[];selectedConceptId?:string;chosenConceptId?:string;approvedConceptId?:string;budgetTier?:BudgetTier;fieldFinds:FieldFind[];progressUpdates:ProgressUpdate[];reminders:string[];deals:Deal[];lastDealCheckAt?:string;comparisonPosition:number;priorityFilter:Filter;sortPreference:Sort;createdAt:string;updatedAt:string};
 export type Progress={currentStage:number;completedStages:number[];status:"working"|"delayed"|"complete"|"error";message?:string;error?:string};
 

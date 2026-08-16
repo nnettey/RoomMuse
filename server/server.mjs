@@ -262,19 +262,13 @@ const server = http.createServer(async (req, res) => {
       writeFileSync(join(storageDir, afterName), rendered);
       const baseUrl = "http://" + req.headers.host;
       const signatureUrl = baseUrl + "/designs/" + afterName;
-      const variants = [];
-      for (const conceptName of ["Refined", "Expressive"]) {
-        try {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          const secondaryImage = await renderRoom(input, info.mime, style, conceptName);
-          const fileName = id + "-" + conceptName.toLowerCase() + ".jpg";
-          writeFileSync(join(storageDir, fileName), secondaryImage);
-          variants.push({ conceptName, imageDataUrl: baseUrl + "/designs/" + fileName, designReport: buildDesignReport(roomAnalysis, style, conceptName), generationStatus: "complete" });
-        } catch (error) {
-          log(`[design ${id}] ${conceptName} render failed: ${error instanceof Error ? error.message : error}`);
-          variants.push({ conceptName, imageDataUrl: signatureUrl, designReport: buildDesignReport(roomAnalysis, style, conceptName), generationStatus: "partial", fallbackReason: "Secondary render unavailable; showing the generated Signature image until this direction is refined." });
-        }
-      }
+      const variants = ["Refined", "Expressive"].map(conceptName => ({
+        conceptName,
+        imageDataUrl: signatureUrl,
+        designReport: buildDesignReport(roomAnalysis, style, conceptName),
+        generationStatus: "partial",
+        fallbackReason: "This direction starts from the generated Signature image. Use Make changes to render its unique direction."
+      }));
       log("[design " + id + "] completed in " + Math.round((Date.now() - started) / 1000) + "s");
       send(res, 200, concept(
         style,

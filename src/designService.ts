@@ -11,7 +11,7 @@ export async function createDesign(photoBase64: string | undefined, style: Desig
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 360_000);
+  const timer = setTimeout(() => controller.abort(), 180_000);
   try {
     const response = await fetch(API_URL + "/api/design", {
       method: "POST",
