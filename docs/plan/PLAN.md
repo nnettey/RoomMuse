@@ -133,6 +133,13 @@ port **8787**; the server listens on **3201** (`server.mjs:17`). `scripts/start-
 product search have all completed (`server.mjs:523-526`). The renders are parallel, but products are chained behind
 analysis, and nothing is returned until the slowest branch finishes.
 
+**D15 — Empty server plans leave secondary variants blank while Signature shows seeded fiction.**
+When the server returns `shoppingItems: []`, `domain.ts:33` gives Signature the seeded fallback via
+`legacy.shoppingItems.length ? … : cs[0].shoppingItems`, but `domain.ts:38` maps `legacy.shoppingItems`
+directly into each variant — yielding an **empty list** for Refined and Expressive. So one concept shows eight
+fabricated products and the other two show nothing at all. Found by the repaired e2e journey
+`scan through share-ready saved shopping plan`, which is deliberately left failing until WS-3 T1 fixes it.
+
 **D14 — Camera permission (RM-1).** `allowCamera` (`EnhancedScreens.tsx:56-59`) is implemented correctly, including
 the `canAskAgain === false` settings deep-link. The README (line 35) already documents that mobile browsers block
 camera on plain-HTTP LAN pages, and `scripts/serve_https.py` exists. **Most likely an HTTPS/origin problem, not a

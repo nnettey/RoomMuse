@@ -188,7 +188,13 @@ predates all v2 work. The cause is a **stale spec**, not broken behaviour — th
 |---|---|---|
 | `getByRole("button", {name: "Choose a photo instead"})` | `"Choose a photo or video instead"` (`EnhancedScreens.tsx:97`) — changed when video capture was added. `getByRole` name matching is substring-based, and the old string is not a substring of the new one. | 4 |
 | `getByRole("button", {name: "View saved shopping plan"})` | `"Open saved decor project"` or `"Continue reviewing design"` — `RoomMuseApp.tsx` always passes `resumeLabel` explicitly, so the default is now unreachable. The same test also assumes Back from Shopping returns Home, but the route map sends it to the project hub (`shopping:"project"`). | 1 |
-| Not yet root-caused: `comparison, report, quantities, owned, remove, restore and undo remain functional` (`/?demo=result`) | — | 1 |
+| `Build my shopping plan` assumed to land on the shopping plan | It routes to the **budget screen**, which did not exist when the spec was written. `Continue to shopping list` is now required to reach the plan. | 1 |
+
+**Repair result (2026-08-16): 8 passed / 1 failed**, up from 3/6. Every change was a locator or navigation-step
+correction to match the app's current intentional behaviour; no assertion was loosened and no test was skipped.
+
+The one remaining failure is **a real product defect, not a stale test — see D15 in PLAN.md §1.4.** It is left
+failing on purpose until WS-3 T1 fixes it, and it is the reason this suite was worth repairing first.
 
 **Consequence:** WS-2 through WS-5 currently have no working end-to-end regression net. Repairing the spec is
 therefore a prerequisite for the gating strategy in `PLAN.md` §6, not end-of-project cleanup — see risk R10.
