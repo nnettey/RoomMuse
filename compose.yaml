@@ -12,14 +12,14 @@ services:
       - path: .env
         required: false
     environment:
-      PORT: 8787
+      PORT: 3201
       ROOMMUSE_DATA_DIR: /var/lib/roommuse
     ports:
-      - "8787:8787"
+      - "3201:3201"
     volumes:
       - roommuse_data:/var/lib/roommuse
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8787/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3201/health"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -27,4 +27,3 @@ services:
 volumes:
   roommuse_data:
     name: roommuse_data
-

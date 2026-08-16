@@ -5,7 +5,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY server ./server
 
-ENV NODE_ENV=production PORT=8787 ROOMMUSE_DATA_DIR=/var/lib/roommuse
-EXPOSE 8787
+ENV NODE_ENV=production PORT=3201 ROOMMUSE_DATA_DIR=/var/lib/roommuse
+EXPOSE 3201
 CMD ["node", "server/server.mjs"]
-

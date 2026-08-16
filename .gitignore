@@ -1,6 +1,7 @@
 node_modules/
 .expo/
 .env
+.env.backup-*
 dist/
 npm-debug.log*
 dist-web/

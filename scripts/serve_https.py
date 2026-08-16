@@ -2,6 +2,7 @@ import http.client
 import http.server
 import mimetypes
 import os
+import socket
 import ssl
 import urllib.parse
 
@@ -10,9 +11,26 @@ WEB_ROOT = os.path.join(ROOT, "dist-web")
 DESIGN_ROOT = os.path.join(ROOT, "storage", "designs")
 LOG_ROOT = os.path.join(ROOT, "logs")
 ACCESS_LOG = os.path.join(LOG_ROOT, "https-access.log")
+API_HOST = os.environ.get("ROOMMUSE_API_HOST", "127.0.0.1")
+API_PORT = int(os.environ.get("ROOMMUSE_API_PORT", "3201"))
+HTTPS_PORT = int(os.environ.get("ROOMMUSE_HTTPS_PORT", "8443"))
 os.makedirs(DESIGN_ROOT, exist_ok=True)
 os.makedirs(LOG_ROOT, exist_ok=True)
 os.chdir(WEB_ROOT)
+
+
+def detect_lan_ip():
+    override = os.environ.get("ROOMMUSE_HTTPS_HOST")
+    if override:
+        return override
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 80))
+        return probe.getsockname()[0]
+    except OSError:
+        return "localhost"
+    finally:
+        probe.close()
 
 
 class RoomMuseHandler(http.server.SimpleHTTPRequestHandler):
@@ -54,7 +72,7 @@ class RoomMuseHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(payload)
             return
         body = self.rfile.read(length)
-        connection = http.client.HTTPConnection("127.0.0.1", 8787, timeout=300)
+        connection = http.client.HTTPConnection(API_HOST, API_PORT, timeout=300)
         try:
             connection.request("POST", "/api/design", body=body, headers={"Content-Type": "application/json"})
             response = connection.getresponse()
@@ -75,12 +93,12 @@ class RoomMuseHandler(http.server.SimpleHTTPRequestHandler):
             connection.close()
 
 
-server = http.server.ThreadingHTTPServer(("0.0.0.0", 8443), RoomMuseHandler)
+server = http.server.ThreadingHTTPServer(("0.0.0.0", HTTPS_PORT), RoomMuseHandler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(
     os.path.join(ROOT, ".certs", "server.crt"),
     os.path.join(ROOT, ".certs", "server.key"),
 )
 server.socket = context.wrap_socket(server.socket, server_side=True)
-print("RoomMuse HTTPS server: https://192.168.4.46:8443", flush=True)
+print(f"RoomMuse HTTPS server: https://{detect_lan_ip()}:{HTTPS_PORT}", flush=True)
 server.serve_forever()

@@ -3,7 +3,7 @@ import {normalizeProject,resolveProjectConflict} from "./domain";
 import {Project} from "./enhancedTypes";
 import {DesignConcept} from "./types";
 
-const KEY="roommuse.project.v2",LEGACY="roommuse.concept";
+const KEY="roommuse.project.v2",LIBRARY="roommuse.projects.v1",LEGACY="roommuse.concept";
 const API_URL=process.env.EXPO_PUBLIC_API_URL??(typeof window!=="undefined"?`${window.location.protocol}//${window.location.hostname}:8787`:undefined);
 
 async function request(path:string,init?:RequestInit){
@@ -46,3 +46,6 @@ export async function saveProject(project:Project){
   }
   return next;
 }
+
+export async function loadProjects(){const raw=await AsyncStorage.getItem(LIBRARY);const projects=raw?(JSON.parse(raw) as Project[]).map(normalizeProject):[];const current=await loadProject();if(current&&!projects.some(p=>p.projectId===current.projectId))projects.push(current);return projects.sort((a,b)=>Date.parse(b.updatedAt)-Date.parse(a.updatedAt));}
+export async function saveToLibrary(project:Project){const saved=await saveProject(project);const projects=await loadProjects();const next=[saved,...projects.filter(p=>p.projectId!==saved.projectId)];await AsyncStorage.setItem(LIBRARY,JSON.stringify(next));return saved;}

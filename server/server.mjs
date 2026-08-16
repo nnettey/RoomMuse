@@ -10,9 +10,13 @@ if (existsSync(".env")) {
   }
 }
 
-const port = Number(process.env.PORT ?? 8787);
+function expandWindowsEnv(value) {
+  return String(value).replace(/%([^%]+)%/g, (_, name) => process.env[name] ?? `%${name}%`);
+}
+
+const port = Number(process.env.PORT ?? 3201);
 const apiKey = process.env.OPENAI_API_KEY;
-const dataDir = process.env.ROOMMUSE_DATA_DIR ?? join(process.cwd(), "storage");
+const dataDir = expandWindowsEnv(process.env.ROOMMUSE_DATA_DIR ?? join(process.cwd(), "storage"));
 const storageDir = join(dataDir, "designs");
 const projectDir = join(dataDir, "projects");
 const logDir = join(dataDir, "logs");
@@ -27,16 +31,230 @@ function log(message) {
   console.log(line);
 }
 
-const catalog = [
-  ["sofa", "Performance linen sofa", "Furniture", "84-inch, warm ivory upholstery", 1, 1299, "Article", "https://www.article.com/search?q=ivory%20sofa"],
-  ["chairs", "Oak accent chair", "Furniture", "Natural oak frame, woven seat", 2, 329, "West Elm", "https://www.westelm.com/search/results.html?words=oak%20accent%20chair"],
-  ["table", "Travertine coffee table", "Furniture", "Rounded 40-inch profile", 1, 549, "CB2", "https://www.cb2.com/search?query=travertine%20coffee%20table"],
-  ["rug", "Handwoven wool rug", "Textiles", "8 x 10 ft, oatmeal", 1, 489, "Rugs USA", "https://www.rugsusa.com/search?q=oatmeal%20wool%20rug"],
-  ["lamp", "Linen floor lamp", "Lighting", "Aged brass with linen shade", 1, 219, "Lamps Plus", "https://www.lampsplus.com/products/?q=linen%20floor%20lamp"],
-  ["paint", "Interior wall paint", "Finishes", "2 gallons, warm soft white", 2, 59, "The Home Depot", "https://www.homedepot.com/s/interior%20paint%20warm%20white"],
-  ["curtains", "Linen curtain panels", "Textiles", "96-inch, natural flax", 2, 89, "Pottery Barn", "https://www.potterybarn.com/search/results.html?words=linen%20curtain"],
-  ["art", "Textured wall art", "Decor", "Neutral 36 x 48-inch canvas", 1, 198, "Etsy", "https://www.etsy.com/search?q=neutral%20textured%20wall%20art"]
-].map(([id,name,category,description,quantity,unitPrice,retailer,purchaseUrl]) => ({id,name,category,description,quantity,unitPrice,retailer,purchaseUrl}));
+const fallbackPlans = {
+  bedroom: [["Upholstered bed", "Furniture", "Room-scaled upholstered bed", 1, 999], ["Bedside table", "Furniture", "Compact bedside storage", 2, 229], ["Bedside lamp", "Lighting", "Warm dimmable bedside light", 2, 119], ["Area rug", "Textiles", "Soft rug sized to extend beyond the bed", 1, 399]],
+  dining: [["Dining table", "Furniture", "Table sized for the visible dining zone", 1, 899], ["Dining chair", "Furniture", "Coordinated dining seating", 6, 189], ["Dining pendant", "Lighting", "Dimmable fixture centered over the table", 1, 349], ["Window panels", "Window treatments", "Full-height light-filtering panels", 2, 99]],
+  office: [["Work desk", "Furniture", "Desk scaled to the visible work wall", 1, 549], ["Ergonomic chair", "Furniture", "Supportive adjustable task chair", 1, 429], ["Task lamp", "Lighting", "Focused dimmable desk lighting", 1, 129], ["Storage unit", "Furniture", "Closed storage for the visible office zone", 1, 399]],
+  default: [["Room-anchoring furniture", "Furniture", "Primary piece scaled for the photographed room", 1, 1099], ["Area rug", "Textiles", "Rug scaled to connect the main furniture group", 1, 449], ["Task light", "Lighting", "Dimmable light for the room's primary activity", 1, 189], ["Window treatment", "Window treatments", "Full-height treatment for the visible window", 2, 109], ["Wall finish", "Finishes", "Coordinated low-VOC interior finish", 2, 59]]
+};
+function roomPlan(analysis) {
+  const type = String(analysis.roomType ?? "").toLowerCase();
+  const key = Object.keys(fallbackPlans).find(name => name !== "default" && type.includes(name)) ?? "default";
+  return fallbackPlans[key].map(([name, category, description, quantity, estimatedUnitPrice]) => ({ name, category, description, quantity, estimatedUnitPrice, dimensions: "Confirm against field measurements", finish: "Coordinate with the selected palette", rationale: `Recommended for the photographed ${analysis.roomType ?? "room"}.`, priority: "High impact", searchQuery: name }));
+}
+function isDirectProductUrl(value) {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    const path = url.pathname.toLowerCase().replace(/\/+$/, "");
+    const blocked = ["/search", "/s/", "/b/", "/keyword", "/collections/", "/category/", "/categories/", "/browse/"];
+    if (url.protocol !== "https:" || !hostname.includes(".") || !path || blocked.some(part => path.includes(part)) || ["q", "query", "keyword"].some(key => url.searchParams.has(key))) return false;
+    const retailerPatterns = [
+      ["homedepot.com", /^\/p\//],
+      ["lowes.com", /^\/pd\//],
+      ["target.com", /^\/p\//],
+      ["walmart.com", /^\/ip\//],
+      ["ikea.com", /\/p\//],
+      ["wayfair.com", /\/pdp\//],
+      ["westelm.com", /^\/products\//],
+      ["potterybarn.com", /^\/products\//],
+      ["crateandbarrel.com", /\/[sf]\d+$/],
+      ["lampsplus.com", /^\/p\//],
+      ["rugsusa.com", /^\/products\//]
+    ];
+    const retailer = retailerPatterns.find(([domain]) => hostname === domain || hostname.endsWith(`.${domain}`));
+    return retailer ? retailer[1].test(path) : true;
+  } catch {
+    return false;
+  }
+}
+function sourceShoppingItems(analysis) {
+  const source = Array.isArray(analysis.shoppingItems) && analysis.shoppingItems.length ? analysis.shoppingItems : roomPlan(analysis);
+  return source.slice(0, 10);
+}
+function responseText(payload) {
+  return payload.output_text ?? payload.output?.flatMap(item => item.content ?? []).find(item => item.type === "output_text")?.text;
+}
+const retailerDomains = [
+  "wayfair.com", "homedepot.com", "lowes.com", "target.com", "walmart.com",
+  "ikea.com", "westelm.com", "potterybarn.com", "crateandbarrel.com",
+  "lampsplus.com", "rugsusa.com"
+];
+function sourceUrlKey(value) {
+  try {
+    const url = new URL(value);
+    for (const key of [...url.searchParams.keys()]) {
+      if (key.startsWith("utm_") || ["ref", "ref_"].includes(key)) url.searchParams.delete(key);
+    }
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+function isAllowedRetailerSource(value) {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+    return retailerDomains.some(domain => hostname === domain || hostname.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
+async function resolveProductBatch(entries, style) {
+  const empty = new Map(entries.map(entry => [entry.requestIndex, []]));
+  if (!apiKey || !entries.length) return empty;
+  const productSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      tier: { type: "string", enum: ["save", "balanced", "invest"] },
+      productName: { type: "string" },
+      retailer: { type: "string" },
+      directUrl: { type: "string" },
+      currentPrice: { type: "number" },
+      currency: { type: "string", enum: ["USD"] },
+      availability: { type: "string" }
+    },
+    required: ["tier", "productName", "retailer", "directUrl", "currentPrice", "currency", "availability"]
+  };
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      matches: {
+        type: "array",
+        maxItems: entries.length,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            requestIndex: { type: "integer" },
+            products: { type: "array", maxItems: 3, items: productSchema }
+          },
+          required: ["requestIndex", "products"]
+        }
+      }
+    },
+    required: ["matches"]
+  };
+  try {
+    const searchResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(30000),
+      body: JSON.stringify({
+        model: process.env.OPENAI_PRODUCT_SEARCH_MODEL ?? "gpt-4o-mini-search-preview",
+        web_search_options: { search_context_size: "medium", user_location: { type: "approximate", approximate: { country: "US" } } },
+        messages: [{ role: "user", content: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.` }]
+      })
+    });
+    if (!searchResponse.ok) throw new Error(`product search returned ${searchResponse.status}: ${(await searchResponse.text()).slice(0, 180)}`);
+    const searchPayload = await searchResponse.json();
+    const message = searchPayload.choices?.[0]?.message;
+    const sourceUrls = new Set((message?.annotations ?? [])
+      .filter(annotation => annotation.type === "url_citation")
+      .map(annotation => annotation.url_citation?.url)
+      .filter(url => isDirectProductUrl(url) && isAllowedRetailerSource(url))
+      .map(sourceUrlKey));
+    if (!sourceUrls.size) return empty;
+    const parseResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(20000),
+      body: JSON.stringify({
+        model: process.env.OPENAI_PRODUCT_PARSE_MODEL ?? "gpt-4.1-mini",
+        input: `Convert the cited retailer search into the required JSON. Preserve requestIndex and infer tier from explicit labels or relative price. Use ONLY these exact cited product URLs: ${JSON.stringify([...sourceUrls])}. Omit claims without an exact cited URL and numeric current USD price. Search text: ${String(message?.content ?? "").slice(0, 20000)}`,
+        text: { format: { type: "json_schema", name: "verified_retail_product_batch", strict: true, schema } }
+      })
+    });
+    if (!parseResponse.ok) throw new Error(`product parsing returned ${parseResponse.status}: ${(await parseResponse.text()).slice(0, 180)}`);
+    const parsed = JSON.parse(String(responseText(await parseResponse.json())));
+    const allowedIndexes = new Set(entries.map(entry => entry.requestIndex));
+    for (const match of Array.isArray(parsed.matches) ? parsed.matches : []) {
+      if (!allowedIndexes.has(match.requestIndex)) continue;
+      const products = (Array.isArray(match.products) ? match.products : []).filter(product =>
+        isDirectProductUrl(product.directUrl) &&
+        sourceUrls.has(sourceUrlKey(product.directUrl)) &&
+        Number.isFinite(Number(product.currentPrice)) &&
+        Number(product.currentPrice) > 0 &&
+        product.currency === "USD"
+      );
+      empty.set(match.requestIndex, products);
+    }
+    return empty;
+  } catch (error) {
+    log(`[products] batch ${entries.map(entry => entry.raw.name ?? entry.requestIndex).join(", ")}: ${error instanceof Error ? error.message : error}`);
+    return empty;
+  }
+}
+async function resolveShoppingItems(analysis, style, conceptId) {
+  const checkedAt = new Date().toISOString();
+  const source = sourceShoppingItems(analysis);
+  const batches = [];
+  for (let index = 0; index < source.length; index += 2) {
+    batches.push(source.slice(index, index + 2).map((raw, offset) => ({ requestIndex: index + offset, raw })));
+  }
+  const resolvedBatches = await Promise.all(batches.map(batch => resolveProductBatch(batch, style)));
+  const choicesByIndex = new Map();
+  for (const batch of resolvedBatches) for (const [index, choices] of batch) choicesByIndex.set(index, choices);
+  const unmatched = source
+    .map((raw, requestIndex) => ({ requestIndex, raw }))
+    .filter(entry => !(choicesByIndex.get(entry.requestIndex)?.length));
+  const fallbackBatches = await Promise.all(unmatched.map(entry => resolveProductBatch([entry], style)));
+  for (const batch of fallbackBatches) {
+    for (const [index, choices] of batch) if (choices.length) choicesByIndex.set(index, choices);
+  }
+  return source.map((raw, index) => {
+    const category = ["Furniture", "Lighting", "Textiles", "Window treatments", "Finishes", "Art", "Decor"].includes(raw.category) ? raw.category : "Decor";
+    const requestedName = String(raw.name ?? `${style} room piece`).slice(0, 100);
+    const estimatedPrice = Math.max(10, Math.round(Number(raw.estimatedUnitPrice) || 100));
+    const choices = choicesByIndex.get(index) ?? [];
+    const primary = choices.find(product => product.tier === "balanced") ?? choices.find(product => product.tier === "invest") ?? choices[0];
+    const verified = Boolean(primary);
+    const base = {
+      name: primary?.productName ?? requestedName,
+      retailer: primary?.retailer ?? "Product match pending",
+      purchaseUrl: primary?.directUrl ?? "",
+      unitPrice: primary ? Math.round(Number(primary.currentPrice) * 100) / 100 : estimatedPrice,
+      dimensions: String(raw.dimensions ?? "Confirm against field measurements"),
+      finish: String(raw.finish ?? "Coordinate with the selected palette"),
+      rationale: String(raw.rationale ?? `Selected for its role in the photographed room and the ${style} design.`),
+      priceStatus: verified ? "verified" : "estimate",
+      lastPriceCheckedAt: verified ? checkedAt : undefined,
+      budgetTier: primary?.tier
+    };
+    const alternatives = choices.filter(product => product !== primary).map((product, productIndex) => ({
+      id: `${conceptId}-${index}-${product.tier}-${productIndex}`,
+      name: product.productName,
+      retailer: product.retailer,
+      purchaseUrl: product.directUrl,
+      unitPrice: Math.round(Number(product.currentPrice) * 100) / 100,
+      dimensions: base.dimensions,
+      finish: base.finish,
+      difference: `${product.tier[0].toUpperCase() + product.tier.slice(1)} tier verified product`,
+      available: true,
+      availability: product.availability,
+      priceStatus: "verified",
+      lastPriceCheckedAt: checkedAt,
+      budgetTier: product.tier
+    }));
+    return {
+      id: `${conceptId}-room-${index}`,
+      conceptId,
+      ...base,
+      category,
+      description: String(raw.description ?? requestedName),
+      quantity: Math.max(1, Math.min(12, Math.round(Number(raw.quantity) || 1))),
+      priority: ["Essential", "High impact", "Finishing touch"].includes(raw.priority) ? raw.priority : "High impact",
+      isOwned: Boolean(raw.retainedExisting),
+      isStructurallyImportant: raw.priority === "Essential",
+      matchIndicators: [`Grounded in photographed ${analysis.roomType ?? "room"}`, `Matches ${style} direction`],
+      availability: primary?.availability ?? "No exact product page and current price could be verified. Purchase link withheld.",
+      originalSelection: base,
+      alternatives
+    };
+  });
+}
 
 const palettes = {
   Modern: ["#D8CFC0", "#262923", "#F5F2EA"], Contemporary: ["#B8A99A", "#788078", "#F4F0E8"],
@@ -48,12 +266,12 @@ const palettes = {
   "French Country": ["#9BA79A", "#6D7B8B", "#EFE4D2"]
 };
 
-function concept(style, id, beforeImageUrl, imageDataUrl, roomAnalysis, variants = []) {
+function concept(style, id, beforeImageUrl, imageDataUrl, roomAnalysis, shoppingItems, variants = []) {
   return { id, title: style + " Signature", style, beforeImageUrl, imageDataUrl,
     summary: "A room-grounded " + style.toLowerCase() + " direction with deliberate layout, lighting, materials, and pieces.",
     palette: palettes[style] ?? palettes.Modern,
     principles: ["Preserve visible circulation", "Coordinate materials across the complete room", "Layer ambient, task, and accent lighting"],
-    shoppingItems: catalog,
+    shoppingItems,
     roomAnalysis,
     designReport: buildDesignReport(roomAnalysis, style, "Signature"),
     variants
@@ -114,30 +332,74 @@ function fallbackRoomAnalysis() {
   };
 }
 
-async function analyzeRoom(imageBuffer, imageMime) {
+async function analyzeRoom(imageBuffer, imageMime, style, additionalImages = []) {
   if (!apiKey) return fallbackRoomAnalysis();
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(60000),
-      body: JSON.stringify({
-        model: process.env.OPENAI_ANALYSIS_MODEL ?? "gpt-4.1-mini",
-        input: [{ role: "user", content: [
-          { type: "input_text", text: "Analyze only visible evidence in this room photo. Return only JSON with roomType, proportions, focalPoints array, lighting, retainedElements array, circulation, confidence. Never invent measurements." },
-          { type: "input_image", image_url: "data:" + imageMime + ";base64," + imageBuffer.toString("base64") }
-        ] }]
-      })
-    });
-    if (!response.ok) throw new Error("Room analysis returned " + response.status);
-    const payload = await response.json();
-    const text = payload.output_text ?? payload.output?.flatMap(item => item.content ?? []).find(item => item.type === "output_text")?.text;
-    const json = String(text).replace(/^[^{]*/, "").replace(/[^}]*$/, "");
-    return { ...fallbackRoomAnalysis(), ...JSON.parse(json) };
-  } catch (error) {
-    log("[analysis] optional room analysis failed: " + (error instanceof Error ? error.message : error));
-    return fallbackRoomAnalysis();
+  const fields = {
+    roomType: { type: "string" },
+    proportions: { type: "string" },
+    focalPoints: { type: "array", items: { type: "string" } },
+    lighting: { type: "string" },
+    retainedElements: { type: "array", items: { type: "string" } },
+    circulation: { type: "string" },
+    confidence: { type: "string" },
+    shoppingItems: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          category: { type: "string", enum: ["Furniture", "Lighting", "Textiles", "Window treatments", "Finishes", "Art", "Decor"] },
+          description: { type: "string" },
+          quantity: { type: "integer" },
+          estimatedUnitPrice: { type: "number" },
+          dimensions: { type: "string" },
+          finish: { type: "string" },
+          rationale: { type: "string" },
+          priority: { type: "string", enum: ["Essential", "High impact", "Finishing touch"] },
+          searchQuery: { type: "string" },
+          retainedExisting: { type: "boolean" }
+        },
+        required: ["name", "category", "description", "quantity", "estimatedUnitPrice", "dimensions", "finish", "rationale", "priority", "searchQuery", "retainedExisting"]
+      }
+    }
+  };
+  let failure;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({
+          model: process.env.OPENAI_ANALYSIS_MODEL ?? "gpt-4.1-mini",
+          input: [{ role: "user", content: [
+            { type: "input_text", text: `Analyze only visible evidence in these room images, then propose a ${style} redesign shopping plan specifically for this room. Include 6-10 pieces that are visibly retained or explicitly proposed for this room and design. Do not use a generic fixed list. Never invent exact room measurements.` },
+            { type: "input_image", image_url: "data:" + imageMime + ";base64," + imageBuffer.toString("base64") },
+            ...additionalImages.map(image => ({ type: "input_image", image_url: "data:" + image.mime + ";base64," + image.buffer.toString("base64") }))
+          ] }],
+          text: {
+            format: {
+              type: "json_schema",
+              name: "room_analysis_and_shopping",
+              strict: true,
+              schema: { type: "object", additionalProperties: false, properties: fields, required: Object.keys(fields) }
+            }
+          }
+        })
+      });
+      if (!response.ok) throw new Error("Room analysis returned " + response.status + ": " + (await response.text()).slice(0, 240));
+      const payload = await response.json();
+      const output = payload.output_text ?? payload.output?.flatMap(item => item.content ?? []).find(item => item.type === "output_text")?.text;
+      const analysis = JSON.parse(String(output));
+      if (!Array.isArray(analysis.shoppingItems) || analysis.shoppingItems.length < 1) throw new Error("Room analysis returned no shopping items.");
+      return analysis;
+    } catch (error) {
+      failure = error;
+      log(`[analysis] attempt ${attempt} failed: ${error instanceof Error ? error.message : error}`);
+    }
   }
+  throw new Error("Room analysis could not produce a grounded shopping plan: " + (failure instanceof Error ? failure.message : failure));
 }
 
 function buildDesignReport(analysis, style, name) {
@@ -245,43 +507,46 @@ const server = http.createServer(async (req, res) => {
     if (tooLarge) return send(res, 413, { error: "The room scan is too large. Retake it and try again." });
     let beforePath;
     try {
-      const { imageBase64, style = "Modern" } = JSON.parse(raw);
-      if (!imageBase64) return send(res, 400, { error: "imageBase64 is required" });
+      const { imageBase64, imageBase64s = [], style = "Modern" } = JSON.parse(raw);
+      const encodedScans = (Array.isArray(imageBase64s) && imageBase64s.length ? imageBase64s : [imageBase64]).filter(Boolean).slice(0, 3);
+      if (!encodedScans.length) return send(res, 400, { error: "At least one room image is required" });
       const id = randomUUID();
-      const input = Buffer.from(imageBase64, "base64");
-      const info = inputImageInfo(input);
+      const scans = encodedScans.map(encoded => { const buffer = Buffer.from(encoded, "base64"); return { buffer, ...inputImageInfo(buffer) }; });
+      const input = scans[0].buffer;
+      const info = scans[0];
       const beforeName = `${id}-before.${info.extension}`;
       const afterName = `${id}-after.jpg`;
       beforePath = join(storageDir, beforeName);
       writeFileSync(beforePath, input);
       log("[design " + id + "] " + style + " started");
-      const [roomAnalysis, rendered] = await Promise.all([
-        analyzeRoom(input, info.mime),
-        renderRoom(input, info.mime, style, "Signature")
-      ]);
-      writeFileSync(join(storageDir, afterName), rendered);
+      const conceptNames = ["Signature", "Refined", "Expressive"];
+      const roomAnalysisPromise = analyzeRoom(input, info.mime, style, scans.slice(1));
+      const renderPromise = Promise.allSettled(conceptNames.map(conceptName => renderRoom(input, info.mime, style, conceptName)));
+      const shoppingPromise = roomAnalysisPromise.then(analysis => resolveShoppingItems(analysis, style, id));
+      const [roomAnalysis, renderResults, shoppingItems] = await Promise.all([roomAnalysisPromise, renderPromise, shoppingPromise]);
+      const primary = renderResults[0];
+      if (!primary || primary.status === "rejected") throw primary?.reason ?? new Error("The primary design render failed.");
+      writeFileSync(join(storageDir, afterName), primary.value);
       const baseUrl = "http://" + req.headers.host;
       const signatureUrl = baseUrl + "/designs/" + afterName;
-      const variants = [];
-      for (const conceptName of ["Refined", "Expressive"]) {
-        try {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          const secondaryImage = await renderRoom(input, info.mime, style, conceptName);
+      const variants = conceptNames.slice(1).map((conceptName, index) => {
+        const result = renderResults[index + 1];
+        if (result?.status === "fulfilled") {
           const fileName = id + "-" + conceptName.toLowerCase() + ".jpg";
-          writeFileSync(join(storageDir, fileName), secondaryImage);
-          variants.push({ conceptName, imageDataUrl: baseUrl + "/designs/" + fileName, designReport: buildDesignReport(roomAnalysis, style, conceptName), generationStatus: "complete" });
-        } catch (error) {
-          log(`[design ${id}] ${conceptName} render failed: ${error instanceof Error ? error.message : error}`);
-          variants.push({ conceptName, imageDataUrl: signatureUrl, designReport: buildDesignReport(roomAnalysis, style, conceptName), generationStatus: "partial", fallbackReason: "Secondary render unavailable; showing the generated Signature image until this direction is refined." });
+          writeFileSync(join(storageDir, fileName), result.value);
+          return { conceptName, imageDataUrl: baseUrl + "/designs/" + fileName, designReport: buildDesignReport(roomAnalysis, style, conceptName), generationStatus: "complete" };
         }
-      }
-      log("[design " + id + "] completed in " + Math.round((Date.now() - started) / 1000) + "s");
+        log(`[design ${id}] ${conceptName} render failed: ${result?.reason instanceof Error ? result.reason.message : result?.reason}`);
+        return { conceptName, imageDataUrl: signatureUrl, designReport: buildDesignReport(roomAnalysis, style, conceptName), generationStatus: "partial", fallbackReason: "Secondary render unavailable; showing the generated Signature image until this direction is refined." };
+      });
+      log("[design " + id + "] completed in " + Math.round((Date.now() - started) / 1000) + "s with " + shoppingItems.length + " room-grounded shopping items");
       send(res, 200, concept(
         style,
         id,
         baseUrl + "/designs/" + beforeName,
-        baseUrl + "/designs/" + afterName,
+        signatureUrl,
         roomAnalysis,
+        shoppingItems,
         variants
       ));
     } catch (error) {
@@ -293,4 +558,3 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => log(`RoomMuse studio listening on http://0.0.0.0:${port} (${apiKey ? "AI enabled" : "demo mode"})`));
-

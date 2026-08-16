@@ -4,8 +4,9 @@ import { DesignConcept, DesignStyle } from "./types";
 const API_URL = process.env.EXPO_PUBLIC_API_URL ??
   (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8787` : "");
 
-export async function createDesign(photoBase64: string | undefined, style: DesignStyle): Promise<DesignConcept> {
-  if (!photoBase64) {
+export async function createDesign(photoBase64: string | string[] | undefined, style: DesignStyle): Promise<DesignConcept> {
+  const imageBase64s = Array.isArray(photoBase64) ? photoBase64.filter(Boolean).slice(0, 3) : photoBase64 ? [photoBase64] : [];
+  if (!imageBase64s.length) {
     await new Promise(resolve => setTimeout(resolve, 2200));
     return demoConcept(style);
   }
@@ -16,7 +17,7 @@ export async function createDesign(photoBase64: string | undefined, style: Desig
     const response = await fetch(API_URL + "/api/design", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageBase64: photoBase64, style: style.name }),
+      body: JSON.stringify({ imageBase64: imageBase64s[0], imageBase64s, style: style.name }),
       signal: controller.signal
     });
     if (!response.ok) {
