@@ -32,6 +32,8 @@ Full reasoning: [`PLAN.md`](PLAN.md). Binding decisions:
 | Date | ID | Decision | Made by | Rationale |
 |---|---|---|---|---|
 | 2026-08-16 | A1–A6 | See above | Lead planner | Post-inspection; see PLAN.md §3 |
+| 2026-08-16 | E1 | **Execution model: sequential in one session, parallel only for genuinely disjoint lanes.** Order: WS-0 + WS-1 → WS-2/3/4 → WS-5 → WS-6. | User | Minified single-line files make concurrent edits unmergeable (PLAN.md §4.2); lowest merge risk |
+| 2026-08-16 | E2 | **Q3 resolved: `C:\Data\LocalNettCreative\Claude_RoomMuse\RoomMuse` is the live checkout.** The `OneDrive\…\roommuse` path in `RM_error.PNG` is a stale copy. Device verification against this repo is meaningful. | User | — |
 
 ---
 
@@ -148,7 +150,7 @@ Mirrors `PLAN.md` §10; update here as they resolve.
 |---|---|---|---|
 | Q1 | Does `gpt-image-2` `/v1/images/edits` accept multiple input images usefully? (S-1) | WS-2 | **Open — blocking** |
 | Q2 | Is the RM-1 camera failure HTTPS/origin or code? Reproduce before changing code. | WS-0 | Open |
-| Q3 | **`RM_error.PNG` shows the crash in `C:\Users\nnett\OneDrive\…\roommuse\src\RoomMuseApp.tsx` — a different working copy from this repo. Is the phone running an older OneDrive checkout?** Device verification is meaningless until this is answered. | WS-0 / user | **Open — ask the user** |
+| Q3 | `RM_error.PNG` shows the crash in a `OneDrive\…\roommuse` path. Which checkout does the phone run? | WS-0 / user | **Resolved 2026-08-16** — this repo is live; the OneDrive path is a stale copy (decision E2) |
 | Q4 | Budget: project-level target only, or category caps too? Planned: project-level + category rollup. | WS-1 | Assumed |
 | Q5 | Acceptable ceiling for concept-generation latency (RM-2 gives no number). | WS-2 / user | Open |
 | Q6 | May a completed project be reopened to in-progress? Planned: yes, deliberate action, completion snapshot preserved. | WS-1 | Assumed |
