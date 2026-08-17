@@ -81,7 +81,7 @@ text model later.
 | WS-1 | Contracts & types | Lead session | `ws/1-contracts` | **Done** | — |
 | WS-2 | Server / AI / commerce | Lead session | `ws/2-server` | **Model migration, URL gate and S-1 merged.** Remaining: `/api/shopping-plan`, budget/constraint-aware search, per-concept differentiation, price refresh, product identification | WS-1 ✓ · key configured ✓ |
 | WS-3 | Domain logic | Lead session | `ws/3-domain-rules` | **Done** — T1–T8 merged. T2 client-side wiring belongs to WS-5 | WS-1 ✓ |
-| WS-4 | Persistence & project store | _unassigned_ | `ws/4-persistence` | Not started | WS-1 ✓ |
+| WS-4 | Persistence & project store | Lead session | `ws/4-persistence` | **Done** | WS-1 ✓ |
 | WS-5 | UI | _unassigned_ | `ws/5-ui` | Not started | WS-1 ✓ (soft: WS-3, WS-4) |
 | WS-6 | Integration & regression | _unassigned_ | `ws/6-integration` | Not started (e2e repair pulled forward into WS-0/WS-3) | all |
 
@@ -150,7 +150,7 @@ Authoritative definitions land in `docs/CONTRACTS_V2.md` (WS-1). Summary of what
 | `appendObservation`, `mergePriceHistory`, `priceMovement(s)`, `applyPriceRefresh`, `completeProject`, `reopenProject`, `canRefreshPrices`, `projectStatus` | WS-3 | WS-4, WS-5 | **Published** — `src/domain.ts` |
 | `substituteItem`, `addFieldItem`, `revertSubstitution`, `toggleFavorite`, `isFavorited`, `compareProducts`, `compareConcepts` | WS-3 | WS-5 | **Published** — `src/domain.ts` |
 
-| Project store (`listProjects`, `openProject`, `setStatus`) | WS-4 | WS-5 | Signatures not yet published |
+| `listProjects`, `listSummaries`, `summarise`, `openProject`, `saveToLibrary`, `renameProject`, `deleteProject`, `setProjectStatus`, `stripInlineImages`, `estimatePayloadBytes` | WS-4 | WS-5 | **Published** — `src/projectStore.ts` |
 
 **Frozen means frozen:** `src/enhancedTypes.ts` is closed to further edits. Any change needs a §8 request naming
 every affected workstream. Two invariants the types deliberately encode, for anyone building against them:
@@ -173,6 +173,7 @@ table and post a §8 handoff note naming every affected workstream.
 | 2026-08-16 | WS-0 | e2e baseline established **and it is red**: 6 failed / 3 passed, identical on `baseline/pre-v2` and on `ws/0-stabilize`. Stale spec, not a regression. See §10 and risk R10. |
 | 2026-08-16 | WS-0 | e2e spec repaired: 8 passed / 1 failed. Remaining failure is the genuine D15 defect, left red on purpose. WS-0 merged to `roommuse-v2/integration`. |
 | 2026-08-16 | WS-3 | **T1 complete — the seeded-product fallback is gone from every production path.** D15 and D2 fixed. Two leaks closed, the second found by a new test. All gates green: typecheck clean, unit 37/37, e2e 9/9. Merged to integration. |
+| 2026-08-17 | WS-4 | **Done.** New `src/projectStore.ts` (list/open/rename/delete/status, summaries), `roommuse.project.v3` with additive idempotent migration, and v1/v2 keys still read and never deleted. **Caught a defect that would have made WS-1 and WS-3 invisible:** `normalizeProject` built an explicit object and silently dropped all 11 v3 fields, so budget, constraints, favorites, status and room context were erased on every save/reload. Conflict resolution now unions price history and never loses a constraint release. **Risk R8 measured and closed:** a real 3-photo project is 825 KB inline, so 8 rooms breach Android's ~6 MB AsyncStorage ceiling; library entries now store photos by reference (33 KB, 25x smaller) while the active project keeps its inline copies. Gates: typecheck clean, **unit 70/70**, e2e 9/9. |
 | 2026-08-17 | WS-3 | **T3–T8 complete.** New `src/budget.ts` (projected spend, variance, category rollup, cost drivers, gap-closing substitutions) and `src/constraints.ts` (guard, explicit recorded release, legacy decision mapping). `domain.ts` gains append-only price history, lifecycle with completion snapshot, in-store substitution/addition with revert, favorites and comparison. `applyBudget` is now constraint-aware. 22 new tests. Gates: typecheck clean, **unit 62/62**, e2e 9/9. |
 | 2026-08-17 | WS-2 | **`POST /api/shopping-plan` shipped (A2).** Per-variation concept briefs, budget- and constraint-aware search, and REQ-11 provenance/`priceHistory`/`unresolved` on every item. `/api/design` now accepts `budget`, `constraints`, `retainedItems`, `roomDimensions`. **Live proof, same room, $6,000 budget, "keep my sectional" constraint:** Refined → $1,142, Expressive → $2,337, **0 of 4 product names shared between them**, 0 unresolved, sectional never proposed. Gates: typecheck clean, unit 40/40, e2e 9/9. |
 | 2026-08-17 | WS-0 | **Device verification passed.** User confirms the app functions well on iPhone through Expo Go. D1 (launch crash) verified fixed on hardware; RM-1/RM-4/RM-5 not reproducible — correctly left uncoded. |
