@@ -43,3 +43,33 @@ export async function refineDesign(imageBase64:string|undefined,style:DesignStyl
     return response.json() as Promise<RefinementResult>;
   }catch(error){if(error instanceof Error&&error.name==="AbortError")throw new Error("The refinement took too long. Try again when the connection is stable.");throw error}finally{clearTimeout(timer)}
 }
+
+// ── Shopping plan for one chosen variation (REQ-2, REQ-5, REQ-10) ────────────
+export type ShoppingPlanRequest={conceptId:string;conceptName:string;style:DesignStyle;roomAnalysis:unknown;budget?:{total:number;currency:"USD"};constraints?:{id:string;kind:string;label:string;releasedAt?:string}[];retainedItems?:string[];roomDimensions?:string};
+export type ShoppingPlanResult={conceptId:string;conceptName:string;items:unknown[];resolvedAt:string;unresolvedCount:number;projectedSpend:number};
+export async function buildShoppingPlan(request:ShoppingPlanRequest):Promise<ShoppingPlanResult>{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),300_000);
+  try{
+    const response=await fetch(API_URL+"/api/shopping-plan",{method:"POST",headers:{"Content-Type":"application/json"},signal:controller.signal,
+      body:JSON.stringify({...request,style:request.style.name})});
+    if(!response.ok){const payload=await response.json().catch(()=>({})) as{error?:string};throw new Error(payload.error??"The shopping plan could not be built. Try again.")}
+    return response.json() as Promise<ShoppingPlanResult>;
+  }catch(error){
+    if(error instanceof Error&&error.name==="AbortError")throw new Error("Building the shopping plan took too long. Try again when your connection is stable.");
+    throw error;
+  }finally{clearTimeout(timer)}
+}
+
+// ── Price refresh (REQ-7) ────────────────────────────────────────────────────
+export type RefreshResult={refreshedAt:string;conceptId:string;results:{itemId:string;observation:{price:number;currency:"USD";observedAt:string;availability?:string;source:"verified";url?:string}}[];failed:{itemId:string;reason:string}[]};
+export async function refreshPrices(input:{projectId:string;conceptId:string;status:string;items:{itemId:string;name:string;purchaseUrl:string;unitPrice:number}[]}):Promise<RefreshResult>{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),300_000);
+  try{
+    const response=await fetch(API_URL+"/api/prices/refresh",{method:"POST",headers:{"Content-Type":"application/json"},signal:controller.signal,body:JSON.stringify(input)});
+    if(!response.ok){const payload=await response.json().catch(()=>({})) as{error?:string};throw new Error(payload.error??"Prices could not be refreshed right now.")}
+    return response.json() as Promise<RefreshResult>;
+  }catch(error){
+    if(error instanceof Error&&error.name==="AbortError")throw new Error("The price check took too long. Try again when your connection is stable.");
+    throw error;
+  }finally{clearTimeout(timer)}
+}

@@ -9,3 +9,20 @@ export const shoppingItems=[
 export function apiResponse(partial=false){return{id:"api-signature",title:"Modern Signature",summary:"A room-grounded concept.",style:"Modern",palette:["#ddd","#222","#fafafa"],principles:["Preserve circulation"],beforeImageUrl:roomImage,imageDataUrl:roomImage,shoppingItems:shoppingItems.map(item=>({...item})),designReport:report,roomAnalysis:{roomType:"living room",proportions:"Broad rectangular room",focalPoints:["window"],lighting:"Daylight from the right",retainedElements:["window","flooring"],circulation:"Keep the center path open",confidence:"high"},variants:partial?[]:[{conceptName:"Refined",imageDataUrl:roomImage,designReport:report,generationStatus:"complete"},{conceptName:"Expressive",imageDataUrl:roomImage,designReport:report,generationStatus:"complete"}]}}export async function mockDesign(page:Page,partial=false){await page.route("**/api/design",route=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify(apiResponse(partial))}))}
 
 export async function mockRefine(page:Page){await page.route("**/api/refine",route=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({imageDataUrl:roomImage,generatedAt:new Date().toISOString(),revisionSummary:"Lighter palette"})}))}
+
+export async function mockShoppingPlan(page:Page,items=shoppingItems){await page.route("**/api/shopping-plan",route=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({conceptId:"api-signature",conceptName:"Signature",items:items.map(item=>({...item})),resolvedAt:new Date().toISOString(),unresolvedCount:0,projectedSpend:1518})}))}
+
+/** Seeds a stored project so tests that need one do not depend on a demo route persisting itself. */
+export async function seedProject(page:Page,overrides:Record<string,unknown>={}){
+  const project={projectId:"p-seeded",roomName:"Seeded room",sourceImages:[],selectedConceptId:"c1",
+    concepts:[{id:"c1",conceptId:"c1",conceptName:"Signature",title:"Modern Signature",style:"Modern",summary:"A grounded concept.",
+      conceptDescription:"A grounded concept.",palette:["#ddd","#222","#fafafa"],principles:["Preserve circulation"],materials:["Oak"],
+      layoutSummary:"Open plan",designReport:report,generationStatus:"complete",generatedAt:checkedAt,
+      shoppingItems:shoppingItems.map(item=>({...item,conceptId:"c1"}))}],
+    comparisonPosition:50,priorityFilter:"All",sortPreference:"recommended",
+    createdAt:checkedAt,updatedAt:checkedAt,...overrides};
+  await page.addInitScript(value=>{
+    localStorage.setItem("roommuse.project.v3",JSON.stringify(value));
+    localStorage.setItem("roommuse.projects.v3",JSON.stringify([value]));
+  },project);
+}
