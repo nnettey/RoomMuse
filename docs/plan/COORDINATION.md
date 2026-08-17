@@ -32,6 +32,21 @@ Full reasoning: [`PLAN.md`](PLAN.md). Binding decisions:
 | Date | ID | Decision | Made by | Rationale |
 |---|---|---|---|---|
 | 2026-08-16 | A1–A6 | See above | Lead planner | Post-inspection; see PLAN.md §3 |
+| 2026-08-16 | **A7** | **`gpt-5.6-luna` serves every text role** (room analysis, live product search, citation-constrained parse) via `OPENAI_TEXT_MODEL`, each role still individually overridable. **The room render stays on `gpt-image-2`.** | User (model choice); capability limits verified against the live API | See the capability matrix below — the render exclusion is an API constraint, not a preference |
+| 2026-08-16 | **A8** | **Live product search moves from `chat/completions` + `web_search_options` to `/v1/responses` + the `web_search` tool.** Citation gating is unchanged; only the citation's shape differs (`annotation.url`, flat, instead of `annotation.url_citation.url`). | Forced by A7 | `web_search_options` is specific to the `*-search-preview` models and the text model rejects it. The tool is also better here: the model issues several searches and reasons across them |
+
+### `gpt-5.6-luna` capability matrix — measured against the live API, not assumed
+
+| Role | Endpoint | Result | Model used |
+|---|---|---|---|
+| Room analysis, product parse | `POST /v1/responses` + strict `json_schema` | **200 — works** | `gpt-5.6-luna` |
+| Live product search | `POST /v1/responses` + `tools:[{type:"web_search"}]` | **200 — works**, returns real `url_citation` annotations to retailer product pages | `gpt-5.6-luna` |
+| Live product search (old path) | `POST /v1/chat/completions` + `web_search_options` | **400** `Unknown parameter: 'web_search_options'` | — |
+| Room render | `POST /v1/images/edits` | **400** `image_generation_user_error: The model 'gpt-5.6-luna' does not exist` | **`gpt-image-2`** (unchanged) |
+
+The render exclusion is not a judgment call: `/v1/images/edits` accepts only image models. `OPENAI_IMAGE_MODEL`
+now exists so it is configurable, and an integration test pins the default so it cannot be "simplified" into the
+text model later.
 | 2026-08-16 | E1 | **Execution model: sequential in one session, parallel only for genuinely disjoint lanes.** Order: WS-0 + WS-1 → WS-2/3/4 → WS-5 → WS-6. | User | Minified single-line files make concurrent edits unmergeable (PLAN.md §4.2); lowest merge risk |
 | 2026-08-16 | E2 | **Q3 resolved: `C:\Data\LocalNettCreative\Claude_RoomMuse\RoomMuse` is the live checkout.** The `OneDrive\…\roommuse` path in `RM_error.PNG` is a stale copy. Device verification against this repo is meaningful. | User | — |
 
@@ -134,6 +149,7 @@ table and post a §8 handoff note naming every affected workstream.
 | 2026-08-16 | WS-0 | e2e baseline established **and it is red**: 6 failed / 3 passed, identical on `baseline/pre-v2` and on `ws/0-stabilize`. Stale spec, not a regression. See §10 and risk R10. |
 | 2026-08-16 | WS-0 | e2e spec repaired: 8 passed / 1 failed. Remaining failure is the genuine D15 defect, left red on purpose. WS-0 merged to `roommuse-v2/integration`. |
 | 2026-08-16 | WS-3 | **T1 complete — the seeded-product fallback is gone from every production path.** D15 and D2 fixed. Two leaks closed, the second found by a new test. All gates green: typecheck clean, unit 37/37, e2e 9/9. Merged to integration. |
+| 2026-08-16 | WS-2 | **Model migration complete (A7/A8).** All three text roles on `gpt-5.6-luna`; search migrated to the Responses `web_search` tool; render pinned to `gpt-image-2` with a new `OPENAI_IMAGE_MODEL` override. **Live smoke test against the real API: `POST /api/design` → 200 in 76s, both variants rendered, 6/6 shopping items verified with direct product-page URLs** (Home Depot `/p/`, Target `/p/`, Walmart `/ip/`, Rugs USA `/products/`, Lamps Plus `/p/`). Gates: typecheck clean, unit 37/37, e2e 9/9. |
 | 2026-08-16 | WS-1 | **Complete. Data model frozen and API contracts specified** (`src/enhancedTypes.ts` +66/−3, `docs/CONTRACTS_V2.md`). 37/37 unit tests pass with **zero test edits**, which is the proof the additions were purely additive. WS-2, WS-3 (T2–T8), WS-4 and WS-5 are unblocked. |
 
 ---
@@ -184,7 +200,8 @@ Mirrors `PLAN.md` §10; update here as they resolve.
 | Q2 | Is the RM-1 camera failure HTTPS/origin or code? Reproduce before changing code. | WS-0 | Open |
 | Q3 | `RM_error.PNG` shows the crash in a `OneDrive\…\roommuse` path. Which checkout does the phone run? | WS-0 / user | **Resolved 2026-08-16** — this repo is live; the OneDrive path is a stale copy (decision E2) |
 | Q4 | Budget: project-level target only, or category caps too? Planned: project-level + category rollup. | WS-1 | Assumed |
-| Q5 | Acceptable ceiling for concept-generation latency (RM-2 gives no number). | WS-2 / user | Open |
+| Q5 | Acceptable ceiling for concept-generation latency (RM-2 gives no number). | WS-2 / user | Open — first real measurement is **76s** for the full `/api/design` (analysis + 3 renders + product search) on a small fixture |
+| Q7 | **`isDirectProductUrl` is too narrow for Lamps Plus.** The live search returned valid product pages in both `lampsplus.com/p/...` and `lampsplus.com/products/...__273a9.html` forms, but the pattern only allows `^/p/`, so genuine product pages are being rejected and their products silently dropped. Other retailers may have the same problem. | WS-2 | **Open** — widen deliberately, keeping the direct-product rule intact; do not weaken the gate |
 | Q6 | May a completed project be reopened to in-progress? Planned: yes, deliberate action, completion snapshot preserved. | WS-1 | Assumed |
 
 ---
