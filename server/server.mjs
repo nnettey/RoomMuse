@@ -64,6 +64,10 @@ function isDirectProductUrl(value) {
     const path = url.pathname.toLowerCase().replace(/\/+$/, "");
     const blocked = ["/search", "/s/", "/b/", "/keyword", "/collections/", "/category/", "/categories/", "/browse/"];
     if (url.protocol !== "https:" || !hostname.includes(".") || !path || blocked.some(part => path.includes(part)) || ["q", "query", "keyword"].some(key => url.searchParams.has(key))) return false;
+    // Per-retailer product-page shapes. Widen ONLY with evidence of a real product URL being
+    // wrongly rejected — a pattern that is too loose lets a category page through as a product,
+    // which is the failure this whole gate exists to prevent.
+    // KEEP IN SYNC with src/productLinks.ts; a test asserts the two tables are identical.
     const retailerPatterns = [
       ["homedepot.com", /^\/p\//],
       ["lowes.com", /^\/pd\//],
@@ -74,7 +78,7 @@ function isDirectProductUrl(value) {
       ["westelm.com", /^\/products\//],
       ["potterybarn.com", /^\/products\//],
       ["crateandbarrel.com", /\/[sf]\d+$/],
-      ["lampsplus.com", /^\/p\//],
+      ["lampsplus.com", /^\/(p|products)\//],
       ["rugsusa.com", /^\/products\//]
     ];
     const retailer = retailerPatterns.find(([domain]) => hostname === domain || hostname.endsWith(`.${domain}`));
@@ -310,8 +314,23 @@ function inputImageInfo(buffer) {
   return isPng ? { extension: "png", mime: "image/png" } : { extension: "jpg", mime: "image/jpeg" };
 }
 
-async function renderRoom(imageBuffer, imageMime, style, conceptName = "Signature", instructions = "") {
+// Renders one concept from ALL captured views.
+//
+// S-1 spike result (2026-08-17, measured against a real three-photo scan):
+//   - /v1/images/edits accepts multiple images, but ONLY via repeated `image[]` fields. Repeating
+//     `image` returns 400 duplicate_parameter.
+//   - The FIRST image is the base: it defines the camera, framing and geometry of the output.
+//   - The remaining images are genuinely used. With the base view alone, the render invented a
+//     plain curtained wall on the right. With a second view attached and the prompt naming it as
+//     the same room from another angle, the render correctly produced the French doors, the
+//     adjoining dining area and the stair railing — none of which are visible in the base photo.
+//   - The explicit "same space from other angles" wording is load-bearing: without it the extra
+//     views influenced the result only weakly.
+// So all three photos now contribute to the image, not just the analysis (REQ-4).
+async function renderRoom(scans, style, conceptName = "Signature", instructions = "") {
   if (!apiKey) throw new Error("AI rendering is not configured yet. Add OPENAI_API_KEY to the local .env file and restart the RoomMuse studio.");
+  const views = (Array.isArray(scans) ? scans : [scans]).filter(Boolean);
+  if (!views.length) throw new Error("At least one room image is required to render a design.");
   const direction = conceptName === "Refined"
     ? "quiet, tonal, timeless, and lower in visual complexity"
     : conceptName === "Expressive"
@@ -321,9 +340,12 @@ async function renderRoom(imageBuffer, imageMime, style, conceptName = "Signatur
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const form = new FormData();
     form.append("model", imageModel);
-    form.append("image", new File([imageBuffer], imageMime === "image/png" ? "room.png" : "room.jpg", { type: imageMime }));
+    views.forEach((view, index) => form.append("image[]", new File([view.buffer], view.mime === "image/png" ? `room-${index}.png` : `room-${index}.jpg`, { type: view.mime })));
     const refinement = String(instructions).trim().slice(0, 1000);
-    form.append("prompt", "Photorealistically redesign this exact room in an elegant " + style + " style as the " + conceptName + " concept: " + direction + ". Preserve architecture, windows, doors, camera, floor, ceiling, and room geometry. Make furniture silhouettes, layout emphasis, lighting, rug, wall and window treatment, materials, accents, art, and decor meaningfully distinct for this direction. Keep circulation practical." + (refinement ? " Apply these user-requested changes: " + refinement + "." : "") + " Do not add text, people, or watermarks.");
+    const multiView = views.length > 1
+      ? " The first image is the room to redesign and defines the camera position, framing, and geometry of the output. The additional images show the SAME space from other angles: use them to keep the far end of the room, the window wall, and any adjoining areas spatially accurate. Do not move the camera to match them."
+      : "";
+    form.append("prompt", "Photorealistically redesign this exact room in an elegant " + style + " style as the " + conceptName + " concept: " + direction + ". Preserve architecture, windows, doors, camera, floor, ceiling, and room geometry." + multiView + " Make furniture silhouettes, layout emphasis, lighting, rug, wall and window treatment, materials, accents, art, and decor meaningfully distinct for this direction. Keep circulation practical." + (refinement ? " Apply these user-requested changes: " + refinement + "." : "") + " Do not add text, people, or watermarks.");
     form.append("size", "1536x1024");
     form.append("quality", "medium");
     form.append("output_format", "jpeg");
@@ -508,7 +530,7 @@ function handleRefineRequest(req, res) {
       const info = inputImageInfo(input);
       const fileName = `${id}-refined.jpg`;
       log(`[refine ${id}] ${style} ${conceptName} started`);
-      const rendered = await renderRoom(input, info.mime, style, conceptName, instructions);
+      const rendered = await renderRoom([{ buffer: input, mime: info.mime }], style, conceptName, instructions);
       writeFileSync(join(storageDir, fileName), rendered);
       const baseUrl = "http://" + req.headers.host;
       log(`[refine ${id}] completed in ${Math.round((Date.now() - started) / 1000)}s`);
@@ -549,7 +571,7 @@ const server = http.createServer(async (req, res) => {
       log("[design " + id + "] " + style + " started");
       const conceptNames = ["Signature", "Refined", "Expressive"];
       const roomAnalysisPromise = analyzeRoom(input, info.mime, style, scans.slice(1));
-      const renderPromise = Promise.allSettled(conceptNames.map(conceptName => renderRoom(input, info.mime, style, conceptName)));
+      const renderPromise = Promise.allSettled(conceptNames.map(conceptName => renderRoom(scans, style, conceptName)));
       const shoppingPromise = roomAnalysisPromise.then(analysis => resolveShoppingItems(analysis, style, id));
       const [roomAnalysis, renderResults, shoppingItems] = await Promise.all([roomAnalysisPromise, renderPromise, shoppingPromise]);
       const primary = renderResults[0];

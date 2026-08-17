@@ -25,7 +25,28 @@ Full reasoning: [`PLAN.md`](PLAN.md). Binding decisions:
 | A4 | `Item.provenance` (`generated\|discovered\|verified\|cached\|historical\|user-supplied`) + append-only `Item.priceHistory`. `priceStatus` kept as a derived alias for back-compat. | Accepted |
 | A5 | `Project.constraints` is first-class, persisted, injected into analysis/render/shopping prompts, and enforced by a domain guard. Release must be explicit. | Accepted |
 | A6 | `Project.status: in-progress \| complete`. Refresh allowed only for in-progress; completed projects are frozen snapshots. | Accepted |
-| S-1 | Multi-image render support is **unverified**. Spike first, then choose one of the three REQ-4-sanctioned outcomes. | **OPEN — blocks WS-2 render work and WS-5 capture copy** |
+| S-1 | Multi-image render support is **unverified**. Spike first, then choose one of the three REQ-4-sanctioned outcomes. | **RESOLVED 2026-08-17 → outcome (a): multi-image works. Keep the three-photo flow and send all three to the render.** See below |
+
+### S-1 spike result — measured against a real three-photo scan, not assumed
+
+| Question | Answer |
+|---|---|
+| Does `/v1/images/edits` accept multiple images? | **Yes — but only via repeated `image[]` fields.** Repeating `image` returns `400 duplicate_parameter` |
+| How are they used? | **The first image is the base**: it sets the camera, framing and geometry of the output. The rest act as references |
+| Do the extra views actually contribute? | **Yes, decisively.** Base view alone → the render invented a plain curtained wall on the right. Base + one other angle → the render produced the real French doors, adjoining dining area and stair railing, none of which appear in the base photo |
+| Does it need prompting? | **Yes — the wording is load-bearing.** Without explicitly stating the extra images are the same space from other angles, they influenced the result only weakly |
+
+Also confirmed end to end through the server with all three photos: `POST /api/design` → 200 in **67s**
+(down from 100s single-image), all three variants complete, **9/9 products verified** with direct product URLs,
+and the analysis independently identified an *"open-plan living room with an adjoining home-office zone and
+visible stair/landing circulation"* — details visible only in the second and third photographs.
+
+**Consequences for other workstreams:**
+- **WS-5:** the capture screen may now honestly promise that all three photos shape the design. Photo **1 is the
+  hero shot** — it alone determines camera and framing — so the capture guidance should say so. It should also
+  ask for three angles of *the same space*; the spike's first photo was an adjoining zone, and with it first the
+  render redesigned that zone instead.
+- **WS-2:** `renderRoom` now takes all views, base first.
 
 ### Decision log (append new rows; never delete)
 
@@ -149,6 +170,7 @@ table and post a §8 handoff note naming every affected workstream.
 | 2026-08-16 | WS-0 | e2e baseline established **and it is red**: 6 failed / 3 passed, identical on `baseline/pre-v2` and on `ws/0-stabilize`. Stale spec, not a regression. See §10 and risk R10. |
 | 2026-08-16 | WS-0 | e2e spec repaired: 8 passed / 1 failed. Remaining failure is the genuine D15 defect, left red on purpose. WS-0 merged to `roommuse-v2/integration`. |
 | 2026-08-16 | WS-3 | **T1 complete — the seeded-product fallback is gone from every production path.** D15 and D2 fixed. Two leaks closed, the second found by a new test. All gates green: typecheck clean, unit 37/37, e2e 9/9. Merged to integration. |
+| 2026-08-17 | WS-2 | **S-1 resolved and implemented.** `renderRoom` now sends every captured view via `image[]`, base first, with prompt wording naming the extras as the same space from other angles. All three photos now shape the image, not just the analysis (REQ-4). Also fixed Q7: the Lamps Plus URL pattern was rejecting real `/products/` pages. Live: 200 in 67s, 3/3 variants, 9/9 verified products. Gates: typecheck clean, unit 40/40, e2e 9/9. |
 | 2026-08-16 | WS-2 | **Model migration complete (A7/A8).** All three text roles on `gpt-5.6-luna`; search migrated to the Responses `web_search` tool; render pinned to `gpt-image-2` with a new `OPENAI_IMAGE_MODEL` override. **Live smoke test against the real API: `POST /api/design` → 200 in 76s, both variants rendered, 6/6 shopping items verified with direct product-page URLs** (Home Depot `/p/`, Target `/p/`, Walmart `/ip/`, Rugs USA `/products/`, Lamps Plus `/p/`). Gates: typecheck clean, unit 37/37, e2e 9/9. |
 | 2026-08-16 | WS-1 | **Complete. Data model frozen and API contracts specified** (`src/enhancedTypes.ts` +66/−3, `docs/CONTRACTS_V2.md`). 37/37 unit tests pass with **zero test edits**, which is the proof the additions were purely additive. WS-2, WS-3 (T2–T8), WS-4 and WS-5 are unblocked. |
 
@@ -196,7 +218,7 @@ Mirrors `PLAN.md` §10; update here as they resolve.
 
 | # | Question | Owner | Status |
 |---|---|---|---|
-| Q1 | Does `gpt-image-2` `/v1/images/edits` accept multiple input images usefully? (S-1) | WS-2 | **Open — blocking** |
+| Q1 | Does `gpt-image-2` `/v1/images/edits` accept multiple input images usefully? (S-1) | WS-2 | **Resolved 2026-08-17 — yes, via `image[]`, first image is the base. See the S-1 result in §1** |
 | Q2 | Is the RM-1 camera failure HTTPS/origin or code? Reproduce before changing code. | WS-0 | Open |
 | Q3 | `RM_error.PNG` shows the crash in a `OneDrive\…\roommuse` path. Which checkout does the phone run? | WS-0 / user | **Resolved 2026-08-16** — this repo is live; the OneDrive path is a stale copy (decision E2) |
 | Q4 | Budget: project-level target only, or category caps too? Planned: project-level + category rollup. | WS-1 | Assumed |
