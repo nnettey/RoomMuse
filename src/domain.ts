@@ -22,22 +22,37 @@ const fallback=(style:string):Report=>({designDirection:"A considered "+style+" 
 export function normalizeItem(i:Item,conceptId?:string):Item{const originalSelection=i.originalSelection??{name:i.name,retailer:i.retailer,purchaseUrl:i.purchaseUrl,unitPrice:i.unitPrice,dimensions:i.dimensions,finish:i.finish,rationale:i.rationale,availability:i.availability,priceStatus:i.priceStatus,lastPriceCheckedAt:i.lastPriceCheckedAt,budgetTier:i.budgetTier};return{...i,conceptId:i.conceptId??conceptId,dimensions:i.dimensions??"Confirm retailer dimensions",rationale:i.rationale??"Selected to support the concept's palette and functional plan. Confirm dimensions and availability before ordering.",matchIndicators:i.matchIndicators??[],priority:i.priority??"High impact",isOwned:i.isOwned??false,isPurchased:i.isPurchased??i.checked??false,isRemoved:i.isRemoved??false,alternatives:i.alternatives??[],originalSelection};}
 export function normalizeConcept(raw:Partial<Concept>&LegacyConcept,index=0):Concept{const name=raw.conceptName??(["Signature","Refined","Expressive"] as const)[index]??"Signature",id=raw.conceptId??raw.id??"legacy-"+index;return{...raw,id,conceptId:id,beforeImageUrl:assetUrl(raw.beforeImageUrl),imageDataUrl:assetUrl(raw.imageDataUrl),conceptName:name,title:raw.title??(raw.style??"Room")+" "+name,conceptDescription:raw.conceptDescription??raw.summary??"A coordinated room direction.",summary:raw.summary??"A coordinated room direction.",style:raw.style??"Modern",palette:raw.palette??["#D8CFC0","#262923","#F5F2EA"],materials:raw.materials??[],layoutSummary:raw.layoutSummary??"A practical layout that preserves circulation.",principles:raw.principles??[],designReport:raw.designReport??fallback(raw.style??"Modern"),shoppingItems:(raw.shoppingItems??[]).map(i=>normalizeItem(i as Item,id)),generationStatus:raw.generationStatus??"complete",generatedAt:raw.generatedAt??new Date(0).toISOString()};}
 export function normalizeProject(raw:Partial<Project>&{concept?:LegacyConcept}):Project{const now=new Date().toISOString(),source=raw.concepts?.length?raw.concepts:raw.concept?[raw.concept as unknown as Concept]:[],normalized=source.map((c,i)=>normalizeConcept(c as Concept&LegacyConcept,i)),primaryImage=normalized[0]?.imageDataUrl,cs=normalized.map((c,i)=>i>0&&!c.imageDataUrl&&primaryImage?{...c,imageDataUrl:primaryImage,generationStatus:"partial" as const}:c),first=cs[0];return{projectId:raw.projectId??"project-"+Date.now(),roomName:raw.roomName,sourceImages:raw.sourceImages??[],selectedStyle:raw.selectedStyle??styles.find(s=>s.name===first?.style),concepts:cs,selectedConceptId:raw.selectedConceptId??first?.id,chosenConceptId:raw.chosenConceptId,approvedConceptId:raw.approvedConceptId,budgetTier:raw.budgetTier,fieldFinds:raw.fieldFinds??[],progressUpdates:raw.progressUpdates??[],reminders:raw.reminders??[],deals:raw.deals??[],lastDealCheckAt:raw.lastDealCheckAt,comparisonPosition:raw.comparisonPosition??50,priorityFilter:raw.priorityFilter??"All",sortPreference:raw.sortPreference??"recommended",createdAt:raw.createdAt??now,updatedAt:raw.updatedAt??now};}
+/**
+ * Re-key one shopping plan onto a concept. Every concept in a live project draws from the same
+ * server-resolved item list, so the list is produced once and re-keyed per concept rather than
+ * being regenerated (which is what previously let concepts drift apart).
+ */
+export const conceptItems=(items:Item[],conceptId:string):Item[]=>items.map((item,index)=>normalizeItem({...item,id:`${conceptId}-room-${index}`,conceptId},conceptId));
 export function createProject(style:Style,images:Project["sourceImages"],legacy?:LegacyConcept):Project{
   const cs=demoConcepts(style,legacy?.beforeImageUrl??images[0]?.uri,legacy?.imageDataUrl);
   if(legacy){
+    // A live generation happened, so the server response is the ONLY source of shopping items.
+    // Seeded demo products must never appear in a real plan — not even when the product search
+    // resolved nothing, in which case an honest empty plan is the correct result (REQ-1, REQ-11).
+    // Previously Signature fell back to seeded fiction here while the other two concepts were
+    // handed an empty array, so one concept showed eight invented products and two showed none.
+    const serverItems=(legacy.shoppingItems??[]) as Item[];
     const server=legacy as LegacyConcept&{
       designReport?:Report;
       roomAnalysis?:RoomAnalysis;
       variants?:Array<{conceptName:ConceptName;imageDataUrl?:string;designReport?:Report;generationStatus?:"complete"|"partial"|"failed"}>
     };
-    cs[0]=normalizeConcept({...cs[0],...legacy,conceptName:"Signature",roomAnalysis:server.roomAnalysis,designReport:server.designReport??cs[0]!.designReport,shoppingItems:legacy.shoppingItems.length?legacy.shoppingItems as Item[]:cs[0]!.shoppingItems},0);
+    cs[0]=normalizeConcept({...cs[0],...legacy,conceptName:"Signature",roomAnalysis:server.roomAnalysis,designReport:server.designReport??cs[0]!.designReport,shoppingItems:conceptItems(serverItems,cs[0]!.id)},0);
     for(const variant of server.variants??[]){
       const index=cs.findIndex(c=>c.conceptName===variant.conceptName);
       if(index>=0){
         const current=cs[index]!;
-        cs[index]={...current,imageDataUrl:assetUrl(variant.imageDataUrl??cs[0]?.imageDataUrl),designReport:variant.designReport??current.designReport,roomAnalysis:server.roomAnalysis,shoppingItems:(legacy.shoppingItems as Item[]).map((item,itemIndex)=>normalizeItem({...item,id:`${current.id}-room-${itemIndex}`,conceptId:current.id},current.id)),generationStatus:variant.generationStatus==="complete"?"complete":"partial"};
+        cs[index]={...current,imageDataUrl:assetUrl(variant.imageDataUrl??cs[0]?.imageDataUrl),designReport:variant.designReport??current.designReport,roomAnalysis:server.roomAnalysis,shoppingItems:conceptItems(serverItems,current.id),generationStatus:variant.generationStatus==="complete"?"complete":"partial"};
       }
     }
+    // Guarantee: once a live response exists, no concept keeps seeded demo products — including
+    // concepts the server reported no variant for (older responses, partial render failures).
+    for(let index=0;index<cs.length;index+=1){const current=cs[index]!;cs[index]={...current,shoppingItems:conceptItems(serverItems,current.id)};}
   }
   const now=new Date().toISOString();
   return{projectId:"project-"+Date.now(),sourceImages:images,selectedStyle:style,concepts:cs,selectedConceptId:cs[0]!.id,fieldFinds:[],progressUpdates:[],reminders:[],deals:[],comparisonPosition:50,priorityFilter:"All",sortPreference:"recommended",createdAt:now,updatedAt:now};
