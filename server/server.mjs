@@ -16,6 +16,21 @@ function expandWindowsEnv(value) {
 
 const port = Number(process.env.PORT ?? 3201);
 const apiKey = process.env.OPENAI_API_KEY;
+
+// Model roles.
+//
+// One text model now serves every text role. Each role stays individually overridable so a single
+// role can be pinned without disturbing the others.
+//
+// The room render is deliberately NOT on the text model. Verified against the live API:
+// POST /v1/images/edits with model "gpt-5.6-luna" returns
+//   400 image_generation_user_error: "The model 'gpt-5.6-luna' does not exist."
+// That endpoint only accepts image models, so the render stays on gpt-image-2.
+const textModel = process.env.OPENAI_TEXT_MODEL ?? "gpt-5.6-luna";
+const analysisModel = process.env.OPENAI_ANALYSIS_MODEL ?? textModel;
+const productSearchModel = process.env.OPENAI_PRODUCT_SEARCH_MODEL ?? textModel;
+const productParseModel = process.env.OPENAI_PRODUCT_PARSE_MODEL ?? textModel;
+const imageModel = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2";
 const dataDir = expandWindowsEnv(process.env.ROOMMUSE_DATA_DIR ?? join(process.cwd(), "storage"));
 const storageDir = join(dataDir, "designs");
 const projectDir = join(dataDir, "projects");
@@ -138,22 +153,35 @@ async function resolveProductBatch(entries, style) {
     required: ["matches"]
   };
   try {
-    const searchResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+    // Live product search runs through the Responses API web_search tool.
+    //
+    // It cannot use chat/completions + web_search_options: that parameter is specific to the
+    // *-search-preview models. Verified against the live API, the text model returns
+    //   400 invalid_request_error: "Unknown parameter: 'web_search_options'."
+    // The web_search tool is the supported path and is strictly better here — the model issues
+    // several searches and reasons across them, rather than one shot.
+    //
+    // The safety property is unchanged and non-negotiable: only URLs the model actually cited are
+    // eligible. In this API the citation is flat (annotation.url) rather than nested under
+    // annotation.url_citation.url as it was in chat/completions.
+    const searchResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(180000),
       body: JSON.stringify({
-        model: process.env.OPENAI_PRODUCT_SEARCH_MODEL ?? "gpt-4o-mini-search-preview",
-        web_search_options: { search_context_size: "medium", user_location: { type: "approximate", approximate: { country: "US" } } },
-        messages: [{ role: "user", content: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.` }]
+        model: productSearchModel,
+        tools: [{ type: "web_search", search_context_size: "medium", user_location: { type: "approximate", country: "US" } }],
+        input: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.`
       })
     });
     if (!searchResponse.ok) throw new Error(`product search returned ${searchResponse.status}: ${(await searchResponse.text()).slice(0, 180)}`);
     const searchPayload = await searchResponse.json();
-    const message = searchPayload.choices?.[0]?.message;
-    const sourceUrls = new Set((message?.annotations ?? [])
+    const messageParts = (searchPayload.output ?? []).filter(item => item.type === "message").flatMap(item => item.content ?? []);
+    const searchText = messageParts.filter(part => part.type === "output_text").map(part => part.text).join("\n");
+    const sourceUrls = new Set(messageParts
+      .flatMap(part => part.annotations ?? [])
       .filter(annotation => annotation.type === "url_citation")
-      .map(annotation => annotation.url_citation?.url)
+      .map(annotation => annotation.url)
       .filter(url => isDirectProductUrl(url) && isAllowedRetailerSource(url))
       .map(sourceUrlKey));
     if (!sourceUrls.size) return empty;
@@ -162,8 +190,8 @@ async function resolveProductBatch(entries, style) {
       headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(20000),
       body: JSON.stringify({
-        model: process.env.OPENAI_PRODUCT_PARSE_MODEL ?? "gpt-4.1-mini",
-        input: `Convert the cited retailer search into the required JSON. Preserve requestIndex and infer tier from explicit labels or relative price. Use ONLY these exact cited product URLs: ${JSON.stringify([...sourceUrls])}. Omit claims without an exact cited URL and numeric current USD price. Search text: ${String(message?.content ?? "").slice(0, 20000)}`,
+        model: productParseModel,
+        input: `Convert the cited retailer search into the required JSON. Preserve requestIndex and infer tier from explicit labels or relative price. Use ONLY these exact cited product URLs: ${JSON.stringify([...sourceUrls])}. Omit claims without an exact cited URL and numeric current USD price. Search text: ${searchText.slice(0, 20000)}`,
         text: { format: { type: "json_schema", name: "verified_retail_product_batch", strict: true, schema } }
       })
     });
@@ -292,7 +320,7 @@ async function renderRoom(imageBuffer, imageMime, style, conceptName = "Signatur
   let failure = "";
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const form = new FormData();
-    form.append("model", "gpt-image-2");
+    form.append("model", imageModel);
     form.append("image", new File([imageBuffer], imageMime === "image/png" ? "room.png" : "room.jpg", { type: imageMime }));
     const refinement = String(instructions).trim().slice(0, 1000);
     form.append("prompt", "Photorealistically redesign this exact room in an elegant " + style + " style as the " + conceptName + " concept: " + direction + ". Preserve architecture, windows, doors, camera, floor, ceiling, and room geometry. Make furniture silhouettes, layout emphasis, lighting, rug, wall and window treatment, materials, accents, art, and decor meaningfully distinct for this direction. Keep circulation practical." + (refinement ? " Apply these user-requested changes: " + refinement + "." : "") + " Do not add text, people, or watermarks.");
@@ -372,7 +400,7 @@ async function analyzeRoom(imageBuffer, imageMime, style, additionalImages = [])
         headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
         signal: AbortSignal.timeout(60000),
         body: JSON.stringify({
-          model: process.env.OPENAI_ANALYSIS_MODEL ?? "gpt-4.1-mini",
+          model: analysisModel,
           input: [{ role: "user", content: [
             { type: "input_text", text: `Analyze only visible evidence in these room images, then propose a ${style} redesign shopping plan specifically for this room. Include 6-10 pieces that are visibly retained or explicitly proposed for this room and design. Do not use a generic fixed list. Never invent exact room measurements.` },
             { type: "input_image", image_url: "data:" + imageMime + ";base64," + imageBuffer.toString("base64") },
