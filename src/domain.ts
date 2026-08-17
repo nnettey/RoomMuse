@@ -87,4 +87,148 @@ export const selected=(p:Project)=>p.concepts.find(c=>c.id===p.selectedConceptId
 export const replace=(p:Project,c:Concept):Project=>({...p,concepts:p.concepts.map(x=>x.id===c.id?c:x),updatedAt:new Date().toISOString()});
 
 
-export function applyBudget(p:Project,tier:import("./enhancedTypes").BudgetTier):Project{const c=selected(p);if(!c)return p;const items=c.shoppingItems.map(item=>{const base=item.originalSelection??{name:item.name,retailer:item.retailer,purchaseUrl:item.purchaseUrl,unitPrice:item.unitPrice,dimensions:item.dimensions,finish:item.finish,rationale:item.rationale,availability:item.availability,priceStatus:item.priceStatus,lastPriceCheckedAt:item.lastPriceCheckedAt,budgetTier:item.budgetTier};if(item.isOwned||item.isRemoved)return{...item,originalSelection:base};const alternatives=(item.alternatives??[]).filter(a=>a.priceStatus==="verified"&&isDirectProductUrl(a.purchaseUrl));const exact=base.budgetTier===tier&&base.priceStatus==="verified"&&isDirectProductUrl(base.purchaseUrl)?base:alternatives.find(a=>a.budgetTier===tier);const fallback=tier==="save"?alternatives.filter(a=>a.unitPrice<base.unitPrice).sort((a,b)=>a.unitPrice-b.unitPrice)[0]:tier==="invest"?alternatives.slice().sort((a,b)=>b.unitPrice-a.unitPrice)[0]:base;const choice=exact??fallback??base;return{...item,name:choice.name,retailer:choice.retailer,purchaseUrl:choice.purchaseUrl,unitPrice:choice.unitPrice,dimensions:choice.dimensions,finish:choice.finish,availability:choice.availability,priceStatus:choice.priceStatus,lastPriceCheckedAt:choice.lastPriceCheckedAt,budgetTier:choice.budgetTier,rationale:("rationale" in choice?choice.rationale:undefined)??`${tier.charAt(0).toUpperCase()+tier.slice(1)} verified product for the same ${item.category.toLowerCase()} role in this room.`,originalSelection:base}});return{...replace(p,{...c,shoppingItems:items}),budgetTier:tier}}
+export function applyBudget(p:Project,tier:import("./enhancedTypes").BudgetTier):Project{const c=selected(p);if(!c)return p;const items=c.shoppingItems.map(item=>{const base=item.originalSelection??{name:item.name,retailer:item.retailer,purchaseUrl:item.purchaseUrl,unitPrice:item.unitPrice,dimensions:item.dimensions,finish:item.finish,rationale:item.rationale,availability:item.availability,priceStatus:item.priceStatus,lastPriceCheckedAt:item.lastPriceCheckedAt,budgetTier:item.budgetTier};if(item.isOwned||item.isRemoved||constraintsForItem(p,item).length)return{...item,originalSelection:base};const alternatives=(item.alternatives??[]).filter(a=>a.priceStatus==="verified"&&isDirectProductUrl(a.purchaseUrl));const exact=base.budgetTier===tier&&base.priceStatus==="verified"&&isDirectProductUrl(base.purchaseUrl)?base:alternatives.find(a=>a.budgetTier===tier);const fallback=tier==="save"?alternatives.filter(a=>a.unitPrice<base.unitPrice).sort((a,b)=>a.unitPrice-b.unitPrice)[0]:tier==="invest"?alternatives.slice().sort((a,b)=>b.unitPrice-a.unitPrice)[0]:base;const choice=exact??fallback??base;return{...item,name:choice.name,retailer:choice.retailer,purchaseUrl:choice.purchaseUrl,unitPrice:choice.unitPrice,dimensions:choice.dimensions,finish:choice.finish,availability:choice.availability,priceStatus:choice.priceStatus,lastPriceCheckedAt:choice.lastPriceCheckedAt,budgetTier:choice.budgetTier,rationale:("rationale" in choice?choice.rationale:undefined)??`${tier.charAt(0).toUpperCase()+tier.slice(1)} verified product for the same ${item.category.toLowerCase()} role in this room.`,originalSelection:base}});return{...replace(p,{...c,shoppingItems:items}),budgetTier:tier}}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WS-3 rules: price history, lifecycle, substitution, favorites, comparison.
+// Pure functions. Screens call these rather than recomputing behaviour locally.
+// ─────────────────────────────────────────────────────────────────────────────
+import type {ComparisonResult,ComparisonRow,Favorite,IdentifiedProduct,PriceObservation} from "./enhancedTypes";
+import {constraintsForItem} from "./constraints";
+
+/** Append-only, de-duplicated by observation time, oldest first (REQ-7, REQ-11). */
+export function mergePriceHistory(existing:PriceObservation[]=[],incoming:PriceObservation[]=[]):PriceObservation[]{
+  const byTime=new Map<string,PriceObservation>();
+  for(const observation of [...existing,...incoming])if(observation&&observation.observedAt)byTime.set(observation.observedAt,observation);
+  return [...byTime.values()].sort((a,b)=>Date.parse(a.observedAt)-Date.parse(b.observedAt));
+}
+/** Records a new sighting WITHOUT discarding the old one, then makes it the current price. */
+export function appendObservation(item:Item,observation:PriceObservation):Item{
+  const priceHistory=mergePriceHistory(item.priceHistory,[observation]);
+  return{...item,priceHistory,unitPrice:observation.price,availability:observation.availability??item.availability,provenance:observation.source,priceStatus:observation.source==="verified"?"verified":item.priceStatus,lastPriceCheckedAt:observation.observedAt,lastModifiedAt:observation.observedAt};
+}
+export type PriceMovement={itemId:string;name:string;previous?:PriceObservation;current?:PriceObservation;changeAmount:number;changePercent:number;quantity:number;totalEffect:number};
+/** Previous vs current price with the effect on the project total (REQ-7). */
+export function priceMovement(item:Item):PriceMovement{
+  const history=item.priceHistory??[];
+  const current=history[history.length-1],previous=history.length>1?history[history.length-2]:undefined;
+  const changeAmount=current&&previous?current.price-previous.price:0;
+  const quantity=Math.max(0,item.quantity);
+  return{itemId:item.id,name:item.name,previous,current,changeAmount,changePercent:previous&&previous.price>0?changeAmount/previous.price:0,quantity,totalEffect:changeAmount*quantity};
+}
+export const priceMovements=(items:Item[])=>items.map(priceMovement).filter(m=>m.changeAmount!==0);
+
+// ── Lifecycle (REQ-7) ────────────────────────────────────────────────────────
+export const projectStatus=(p:Project)=>p.status??"in-progress";
+/** Completed projects are historical snapshots and are never auto-refreshed. */
+export const canRefreshPrices=(p:Project)=>projectStatus(p)==="in-progress";
+export function completeProject(p:Project):Project{
+  const concept=selected(p),completedAt=new Date().toISOString();
+  const items=(concept?.shoppingItems??[]).filter(i=>!i.isRemoved);
+  return{...p,status:"complete",completedAt,updatedAt:completedAt,completionSnapshot:{completedAt,projectTotal:total(items),items:items.map(i=>({itemId:i.id,name:i.name,retailer:i.retailer,purchaseUrl:i.purchaseUrl,unitPrice:i.unitPrice,quantity:i.quantity,availability:i.availability,observedAt:i.lastPriceCheckedAt}))}};
+}
+/** Reopening starts a new refresh epoch but keeps the completion snapshot for comparison. */
+export const reopenProject=(p:Project):Project=>({...p,status:"in-progress",updatedAt:new Date().toISOString()});
+/**
+ * Applies refreshed prices. Refuses completed projects here as well as at the API boundary —
+ * a snapshot that any other code path can silently rewrite is not a snapshot.
+ */
+export function applyPriceRefresh(p:Project,conceptId:string,results:Array<{itemId:string;observation:PriceObservation}>):Project{
+  if(!canRefreshPrices(p))return p;
+  const refreshedAt=new Date().toISOString();
+  const byId=new Map(results.map(r=>[r.itemId,r.observation]));
+  return{...p,lastPriceRefreshAt:refreshedAt,updatedAt:refreshedAt,concepts:p.concepts.map(c=>c.id!==conceptId?c:{...c,shoppingItems:c.shoppingItems.map(i=>{const observation=byId.get(i.id);return observation?appendObservation(i,observation):i})})};
+}
+
+// ── In-store substitution and addition (REQ-3) ───────────────────────────────
+export type FieldProduct=IdentifiedProduct&{name:string;quantity?:number};
+const userSuppliedItem=(found:FieldProduct,base:Partial<Item>,id:string,conceptId:string,at:string):Item=>normalizeItem({
+  ...base,id,conceptId,name:found.name,category:found.category??base.category??"Decor",
+  description:found.productType??found.compatibility??base.description??found.name,
+  quantity:Math.max(1,Math.round(found.quantity??base.quantity??1)),
+  unitPrice:Number.isFinite(Number(found.price))?Number(found.price):0,
+  retailer:found.retailer??"Found in store",purchaseUrl:found.purchaseUrl??"",
+  dimensions:found.approximateDimensions??base.dimensions,finish:base.finish,
+  // Never "verified": the user supplied this, so it must not read as a confirmed retailer listing.
+  provenance:"user-supplied",priceStatus:"estimate",lastPriceCheckedAt:undefined,
+  availability:found.priceSource==="user-entered"?"Price entered by you in store":"Confirm with the retailer",
+  rationale:found.compatibility??"Added from a product you photographed while shopping.",
+  matchIndicators:found.designImplications??["Added from an in-store photo"],
+  lastModifiedAt:at,priceHistory:Number.isFinite(Number(found.price))?[{price:Number(found.price),currency:"USD",observedAt:at,source:"user-supplied",availability:"Entered while shopping"}]:[]
+} as Item,conceptId);
+/** Replaces a planned item, preserving its role, category and constraint linkage. */
+export function substituteItem(concept:Concept,targetItemId:string,found:FieldProduct):Concept{
+  const at=new Date().toISOString();
+  return{...concept,shoppingItems:concept.shoppingItems.map(item=>item.id!==targetItemId?item:
+    {...userSuppliedItem(found,{category:item.category,description:item.description,quantity:item.quantity,dimensions:item.dimensions,finish:item.finish,priority:item.priority,constraintId:item.constraintId},item.id,concept.id,at),
+     // The original stays recorded so the substitution is reversible.
+     originalSelection:item.originalSelection??{name:item.name,retailer:item.retailer,purchaseUrl:item.purchaseUrl,unitPrice:item.unitPrice,dimensions:item.dimensions,finish:item.finish,rationale:item.rationale,availability:item.availability,priceStatus:item.priceStatus,lastPriceCheckedAt:item.lastPriceCheckedAt,budgetTier:item.budgetTier}})};
+}
+/** Adds a photographed product as a new line rather than replacing one. */
+export function addFieldItem(concept:Concept,found:FieldProduct):Concept{
+  const at=new Date().toISOString();
+  return{...concept,shoppingItems:[...concept.shoppingItems,userSuppliedItem(found,{},concept.id+"-found-"+concept.shoppingItems.length,concept.id,at)]};
+}
+/** Restores the product a substitution replaced. */
+export function revertSubstitution(concept:Concept,itemId:string):Concept{
+  return{...concept,shoppingItems:concept.shoppingItems.map(item=>{
+    if(item.id!==itemId||!item.originalSelection)return item;
+    const o=item.originalSelection;
+    return{...item,name:o.name,retailer:o.retailer,purchaseUrl:o.purchaseUrl,unitPrice:o.unitPrice,dimensions:o.dimensions,finish:o.finish,rationale:o.rationale,availability:o.availability,priceStatus:o.priceStatus,lastPriceCheckedAt:o.lastPriceCheckedAt,budgetTier:o.budgetTier,provenance:o.priceStatus==="verified"?"verified":"generated",lastModifiedAt:new Date().toISOString()};
+  })};
+}
+
+// ── Favorites and comparison (REQ-9) ─────────────────────────────────────────
+export const isFavorited=(p:Project,refId:string)=>(p.favorites??[]).some(f=>f.refId===refId);
+export function toggleFavorite(p:Project,favorite:Favorite):Project{
+  const existing=(p.favorites??[]).find(f=>f.refId===favorite.refId);
+  return{...p,favorites:existing?(p.favorites??[]).filter(f=>f.refId!==favorite.refId):[...(p.favorites??[]),favorite],updatedAt:new Date().toISOString()};
+}
+const money=(n?:number)=>n===undefined?undefined:"$"+Math.round(n).toLocaleString();
+/** Product A vs product B across the axes REQ-9 names, plus honest tradeoffs. */
+export function compareProducts(items:Item[]):ComparisonResult{
+  const rows:ComparisonRow[]=[
+    {label:"Product",values:items.map(i=>i.name)},
+    {label:"Retailer",values:items.map(i=>i.retailer)},
+    {label:"Price",values:items.map(i=>money(i.unitPrice))},
+    {label:"Quantity",values:items.map(i=>i.quantity)},
+    {label:"Budget impact",values:items.map(i=>money(i.unitPrice*Math.max(0,i.quantity)))},
+    {label:"Dimensions",values:items.map(i=>i.dimensions??"Not stated")},
+    {label:"Finish",values:items.map(i=>i.finish??"Not stated")},
+    {label:"Style fit",values:items.map(i=>(i.matchIndicators??[]).join(", ")||"Not assessed")},
+    {label:"Availability",values:items.map(i=>i.availability??"Confirm with retailer")},
+    {label:"Price confidence",values:items.map(i=>i.provenance==="verified"?"Verified on the product page":"Not verified")}
+  ];
+  const cheapest=items.slice().sort((a,b)=>a.unitPrice-b.unitPrice)[0];
+  const tradeoffs:string[]=[];
+  if(items.length>1&&cheapest)tradeoffs.push(cheapest.name+" is the lowest cost at "+money(cheapest.unitPrice)+".");
+  const unverified=items.filter(i=>i.provenance!=="verified");
+  if(unverified.length)tradeoffs.push(unverified.map(i=>i.name).join(", ")+(unverified.length>1?" have":" has")+" no verified retailer price yet, so the comparison is not like for like.");
+  const missing=items.filter(i=>!i.dimensions||i.dimensions==="Confirm retailer dimensions");
+  if(missing.length)tradeoffs.push("Confirm dimensions for "+missing.map(i=>i.name).join(", ")+" before ordering.");
+  return{kind:"product",refIds:items.map(i=>i.id),rows,tradeoffs};
+}
+/** Variation vs variation, so the choice is not made on the image alone (REQ-9). */
+export function compareConcepts(p:Project,conceptIds:string[]):ComparisonResult{
+  const concepts=conceptIds.map(id=>p.concepts.find(c=>c.id===id)).filter((c):c is Concept=>Boolean(c));
+  const rows:ComparisonRow[]=[
+    {label:"Direction",values:concepts.map(c=>c.conceptName)},
+    {label:"Description",values:concepts.map(c=>c.conceptDescription)},
+    {label:"Plan total",values:concepts.map(c=>money(total(c.shoppingItems)))},
+    {label:"Remaining to purchase",values:concepts.map(c=>money(remaining(c.shoppingItems)))},
+    {label:"Pieces",values:concepts.map(c=>c.shoppingItems.filter(i=>!i.isRemoved).length)},
+    {label:"Verified products",values:concepts.map(c=>c.shoppingItems.filter(i=>i.provenance==="verified").length+" of "+c.shoppingItems.filter(i=>!i.isRemoved).length)},
+    {label:"Materials",values:concepts.map(c=>(c.materials??[]).join(", ")||"Not stated")},
+    {label:"Layout",values:concepts.map(c=>c.layoutSummary)}
+  ];
+  const sorted=concepts.slice().sort((a,b)=>total(a.shoppingItems)-total(b.shoppingItems));
+  const tradeoffs:string[]=[];
+  if(sorted.length>1&&sorted[0]&&sorted[sorted.length-1]){
+    const low=sorted[0]!,high=sorted[sorted.length-1]!;
+    const gap=total(high.shoppingItems)-total(low.shoppingItems);
+    if(gap>0)tradeoffs.push(high.conceptName+" costs about "+money(gap)+" more than "+low.conceptName+".");
+  }
+  const shared=concepts.length>1?concepts[0]!.shoppingItems.filter(i=>concepts.every(c=>c.shoppingItems.some(x=>x.name===i.name))).length:0;
+  if(concepts.length>1)tradeoffs.push(shared?shared+" product"+(shared>1?"s are":" is")+" common to these directions; the rest differ.":"These directions share no products, so they are genuinely different plans.");
+  return{kind:"concept",refIds:concepts.map(c=>c.id),rows,tradeoffs};
+}
