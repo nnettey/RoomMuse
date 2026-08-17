@@ -41,13 +41,13 @@ Full reasoning: [`PLAN.md`](PLAN.md). Binding decisions:
 
 | WS | Title | Owner | Branch | Status | Blocked by |
 |---|---|---|---|---|---|
-| WS-0 | Stabilize (P0 defects) | _unassigned_ | `ws/0-stabilize` | Not started | — |
-| WS-1 | Contracts & types | _unassigned_ | `ws/1-contracts` | Not started | — |
-| WS-2 | Server / AI / commerce | _unassigned_ | `ws/2-server` | Not started | WS-1 |
-| WS-3 | Domain logic | _unassigned_ | `ws/3-domain` | Not started | WS-1 |
-| WS-4 | Persistence & project store | _unassigned_ | `ws/4-persistence` | Not started | WS-1 |
-| WS-5 | UI | _unassigned_ | `ws/5-ui` | Not started | WS-1 (soft: WS-3, WS-4) |
-| WS-6 | Integration & regression | _unassigned_ | `ws/6-integration` | Not started | all |
+| WS-0 | Stabilize (P0 defects) | Lead session | `ws/0-stabilize` | **Merged to integration** (device verification still outstanding) | — |
+| WS-1 | Contracts & types | Lead session | `ws/1-contracts` | **Done** | — |
+| WS-2 | Server / AI / commerce | _unassigned_ | `ws/2-server` | Not started — **next**; S-1 spike first | WS-1 ✓ · needs `OPENAI_API_KEY` |
+| WS-3 | Domain logic | Lead session | `ws/3-domain` | **T1 merged**; T2–T8 not started | WS-1 ✓ |
+| WS-4 | Persistence & project store | _unassigned_ | `ws/4-persistence` | Not started | WS-1 ✓ |
+| WS-5 | UI | _unassigned_ | `ws/5-ui` | Not started | WS-1 ✓ (soft: WS-3, WS-4) |
+| WS-6 | Integration & regression | _unassigned_ | `ws/6-integration` | Not started (e2e repair pulled forward into WS-0/WS-3) | all |
 
 Status vocabulary: `Not started` → `In progress` → `Ready for review` → `Merged to integration` → `Done`.
 
@@ -101,15 +101,23 @@ Authoritative definitions land in `docs/CONTRACTS_V2.md` (WS-1). Summary of what
 
 | Interface | Producer | Consumers | Status |
 |---|---|---|---|
-| `Project` v3 (status, budget, constraints, favorites, price history) | WS-1 | WS-2, WS-3, WS-4, WS-5 | Not defined |
-| `Item.provenance` + `PriceObservation` | WS-1 | WS-2, WS-3, WS-5 | Not defined |
-| `POST /api/design` (v2 request: `budget`, `constraints`, `roomDimensions`, `retainedItems`; old shape still accepted) | WS-2 | WS-5 via `designService.ts` | Not defined |
-| `POST /api/shopping-plan` | WS-2 | WS-3, WS-5 | Not defined |
-| `POST /api/prices/refresh` | WS-2 | WS-3, WS-4, WS-5 | Not defined |
-| `POST /api/identify-product` (REQ-3 vision) | WS-2 | WS-5 | Not defined |
-| Budget selectors (`projectedSpend`, `remaining`, `variance`, `byCategory`, `costDrivers`) | WS-3 | WS-5 | Not defined |
-| Constraint guard (`canModifyItem`, `applyConstraints`, `releaseConstraint`) | WS-3 | WS-4, WS-5 | Not defined |
-| Project store (`listProjects`, `openProject`, `setStatus`, migration v2→v3) | WS-4 | WS-5 | Not defined |
+| `Project` v3 (`status`, `budget`, `constraints`, `favorites`, `comparisons`, `roomContext`, `completionSnapshot`) | WS-1 | WS-2, WS-3, WS-4, WS-5 | **Defined & frozen** — `src/enhancedTypes.ts` |
+| `Provenance`, `PriceObservation`, `Unresolved` on `Item` | WS-1 | WS-2, WS-3, WS-5 | **Defined & frozen** — `src/enhancedTypes.ts` |
+| `Budget`, `BudgetSummary`, `CostDriver`, `Constraint`, `Favorite`, `ComparisonResult`, `IdentifiedProduct`, `RoomContext` | WS-1 | WS-2, WS-3, WS-4, WS-5 | **Defined & frozen** — `src/enhancedTypes.ts` |
+| `POST /api/design` (v2 request: `budget`, `constraints`, `roomDimensions`, `retainedItems`; old shape still accepted) | WS-2 | WS-5 via `designService.ts` | **Specified** — `docs/CONTRACTS_V2.md`; WS-2 implements |
+| `POST /api/shopping-plan` | WS-2 | WS-3, WS-5 | **Specified**; WS-2 implements |
+| `POST /api/prices/refresh` | WS-2 | WS-3, WS-4, WS-5 | **Specified**; WS-2 implements |
+| `POST /api/identify-product` (REQ-3 vision) | WS-2 | WS-5 | **Specified**; WS-2 implements |
+| `roommuse.project.v3` + v2→v3 migration | WS-1 spec / WS-4 impl | WS-4, WS-5 | **Specified**; WS-4 implements |
+| Budget selectors (`projectedSpend`, `remaining`, `variance`, `byCategory`, `costDrivers`) | WS-3 | WS-5 | Return type `BudgetSummary` fixed; functions not yet built |
+| Constraint guard (`canModifyItem`, `applyConstraints`, `releaseConstraint`) | WS-3 | WS-4, WS-5 | Signatures not yet published |
+| Project store (`listProjects`, `openProject`, `setStatus`) | WS-4 | WS-5 | Signatures not yet published |
+
+**Frozen means frozen:** `src/enhancedTypes.ts` is closed to further edits. Any change needs a §8 request naming
+every affected workstream. Two invariants the types deliberately encode, for anyone building against them:
+- `variance = budget.total − projectedSpend`. Positive is under budget.
+- Nothing is `verified` unless confirmed on the retailer's own product page with a current price at a recorded
+  time. `user-supplied` is never `verified`. `priceHistory` is append-only and unions across sync replicas.
 
 Rule: **publish the interface here before you build against it.** If you change a published interface, update this
 table and post a §8 handoff note naming every affected workstream.
@@ -125,7 +133,8 @@ table and post a §8 handoff note naming every affected workstream.
 | 2026-08-16 | WS-0 | D1/D10/D11/D12 fixed (commit `cf839a4`). `src/runtimeEnv.ts` added; `typecheck` clean, `test:unit` 16/16. |
 | 2026-08-16 | WS-0 | e2e baseline established **and it is red**: 6 failed / 3 passed, identical on `baseline/pre-v2` and on `ws/0-stabilize`. Stale spec, not a regression. See §10 and risk R10. |
 | 2026-08-16 | WS-0 | e2e spec repaired: 8 passed / 1 failed. Remaining failure is the genuine D15 defect, left red on purpose. WS-0 merged to `roommuse-v2/integration`. |
-| 2026-08-16 | WS-3 | **T1 complete — the seeded-product fallback is gone from every production path.** D15 and D2 fixed. Two leaks closed, the second found by a new test. All gates green: typecheck clean, unit 37/37, e2e 9/9. |
+| 2026-08-16 | WS-3 | **T1 complete — the seeded-product fallback is gone from every production path.** D15 and D2 fixed. Two leaks closed, the second found by a new test. All gates green: typecheck clean, unit 37/37, e2e 9/9. Merged to integration. |
+| 2026-08-16 | WS-1 | **Complete. Data model frozen and API contracts specified** (`src/enhancedTypes.ts` +66/−3, `docs/CONTRACTS_V2.md`). 37/37 unit tests pass with **zero test edits**, which is the proof the additions were purely additive. WS-2, WS-3 (T2–T8), WS-4 and WS-5 are unblocked. |
 
 ---
 
