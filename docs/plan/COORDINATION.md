@@ -9,7 +9,7 @@ Rules:
 4. **Never weaken or delete a test** to make your work pass. Record the conflict in §9 instead.
 5. Append to logs; do not rewrite history in this file.
 
-Last updated: 2026-08-16 — by: Lead planner — reason: initial plan committed.
+Last updated: 2026-08-17 — by: Lead session — reason: S-1 resolved and implemented; URL gate widened; model migration complete.
 
 ---
 
@@ -55,6 +55,8 @@ visible stair/landing circulation"* — details visible only in the second and t
 | 2026-08-16 | A1–A6 | See above | Lead planner | Post-inspection; see PLAN.md §3 |
 | 2026-08-16 | **A7** | **`gpt-5.6-luna` serves every text role** (room analysis, live product search, citation-constrained parse) via `OPENAI_TEXT_MODEL`, each role still individually overridable. **The room render stays on `gpt-image-2`.** | User (model choice); capability limits verified against the live API | See the capability matrix below — the render exclusion is an API constraint, not a preference |
 | 2026-08-16 | **A8** | **Live product search moves from `chat/completions` + `web_search_options` to `/v1/responses` + the `web_search` tool.** Citation gating is unchanged; only the citation's shape differs (`annotation.url`, flat, instead of `annotation.url_citation.url`). | Forced by A7 | `web_search_options` is specific to the `*-search-preview` models and the text model rejects it. The tool is also better here: the model issues several searches and reasons across them |
+| 2026-08-16 | E1 | **Execution model: sequential in one session, parallel only for genuinely disjoint lanes.** Order: WS-0 + WS-1 → WS-2/3/4 → WS-5 → WS-6. | User | Minified single-line files make concurrent edits unmergeable (PLAN.md §4.2); lowest merge risk |
+| 2026-08-16 | E2 | **Q3 resolved: `C:\Data\LocalNettCreative\Claude_RoomMuse\RoomMuse` is the live checkout.** The `OneDrive\…\roommuse` path in `RM_error.PNG` is a stale copy. Device verification against this repo is meaningful. | User | — |
 
 ### `gpt-5.6-luna` capability matrix — measured against the live API, not assumed
 
@@ -68,8 +70,6 @@ visible stair/landing circulation"* — details visible only in the second and t
 The render exclusion is not a judgment call: `/v1/images/edits` accepts only image models. `OPENAI_IMAGE_MODEL`
 now exists so it is configurable, and an integration test pins the default so it cannot be "simplified" into the
 text model later.
-| 2026-08-16 | E1 | **Execution model: sequential in one session, parallel only for genuinely disjoint lanes.** Order: WS-0 + WS-1 → WS-2/3/4 → WS-5 → WS-6. | User | Minified single-line files make concurrent edits unmergeable (PLAN.md §4.2); lowest merge risk |
-| 2026-08-16 | E2 | **Q3 resolved: `C:\Data\LocalNettCreative\Claude_RoomMuse\RoomMuse` is the live checkout.** The `OneDrive\…\roommuse` path in `RM_error.PNG` is a stale copy. Device verification against this repo is meaningful. | User | — |
 
 ---
 
@@ -79,7 +79,7 @@ text model later.
 |---|---|---|---|---|---|
 | WS-0 | Stabilize (P0 defects) | Lead session | `ws/0-stabilize` | **Merged to integration** (device verification still outstanding) | — |
 | WS-1 | Contracts & types | Lead session | `ws/1-contracts` | **Done** | — |
-| WS-2 | Server / AI / commerce | _unassigned_ | `ws/2-server` | Not started — **next**; S-1 spike first | WS-1 ✓ · needs `OPENAI_API_KEY` |
+| WS-2 | Server / AI / commerce | Lead session | `ws/2-server` | **Model migration, URL gate and S-1 merged.** Remaining: `/api/shopping-plan`, budget/constraint-aware search, per-concept differentiation, price refresh, product identification | WS-1 ✓ · key configured ✓ |
 | WS-3 | Domain logic | Lead session | `ws/3-domain` | **T1 merged**; T2–T8 not started | WS-1 ✓ |
 | WS-4 | Persistence & project store | _unassigned_ | `ws/4-persistence` | Not started | WS-1 ✓ |
 | WS-5 | UI | _unassigned_ | `ws/5-ui` | Not started | WS-1 ✓ (soft: WS-3, WS-4) |
