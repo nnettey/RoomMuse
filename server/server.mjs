@@ -618,6 +618,179 @@ function handleProjectRequest(req, res) {
     } catch { send(res, 400, { error: "Invalid project payload" }); }
   });
 }
+// ── POST /api/prices/refresh (REQ-7, REQ-11) ─────────────────────────────────
+//
+// Re-checks the price and availability of items the user already has, at the SAME product page.
+// The rule that makes this safe is the same one the initial search uses: a figure is only accepted
+// if the model actually cited the exact URL we asked about. A refresh that quietly re-prices an
+// item from some other listing would be worse than no refresh at all.
+async function refreshProductPrices(items) {
+  const checkedAt = new Date().toISOString();
+  const results = [];
+  const failed = [];
+  const eligible = items.filter(item => isDirectProductUrl(item.purchaseUrl) && isAllowedRetailerSource(item.purchaseUrl));
+  for (const item of items) {
+    if (!eligible.includes(item)) failed.push({ itemId: item.itemId, reason: "This item has no verified retailer product page to re-check." });
+  }
+  if (!apiKey || !eligible.length) return { checkedAt, results, failed };
+
+  const schema = {
+    type: "object", additionalProperties: false,
+    properties: {
+      prices: {
+        type: "array", maxItems: eligible.length,
+        items: {
+          type: "object", additionalProperties: false,
+          properties: { itemId: { type: "string" }, url: { type: "string" }, currentPrice: { type: "number" }, currency: { type: "string", enum: ["USD"] }, availability: { type: "string" } },
+          required: ["itemId", "url", "currentPrice", "currency", "availability"]
+        }
+      }
+    },
+    required: ["prices"]
+  };
+
+  for (let index = 0; index < eligible.length; index += 3) {
+    const batch = eligible.slice(index, index + 3);
+    try {
+      const search = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(180000),
+        body: JSON.stringify({
+          model: productSearchModel,
+          tools: [{ type: "web_search", search_context_size: "low", user_location: { type: "approximate", country: "US" } }],
+          input: `Today is ${checkedAt.slice(0, 10)}. For EACH product page below, open that exact page and report its CURRENT listed USD price and availability. Do not substitute a different product, a different variant, or a different retailer. If a page cannot be read, say so for that item and move on. Items: ${JSON.stringify(batch.map(item => ({ itemId: item.itemId, name: item.name, url: item.purchaseUrl })))}`
+        })
+      });
+      if (!search.ok) throw new Error(`price refresh returned ${search.status}: ${(await search.text()).slice(0, 160)}`);
+      const payload = await search.json();
+      const parts = (payload.output ?? []).filter(entry => entry.type === "message").flatMap(entry => entry.content ?? []);
+      const text = parts.filter(part => part.type === "output_text").map(part => part.text).join("\n");
+      const cited = new Set(parts.flatMap(part => part.annotations ?? []).filter(a => a.type === "url_citation").map(a => sourceUrlKey(a.url)));
+
+      const parse = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({
+          model: productParseModel,
+          input: `Convert this price check into JSON. Use ONLY these itemId/url pairs: ${JSON.stringify(batch.map(item => ({ itemId: item.itemId, url: item.purchaseUrl })))}. Omit any item whose current price was not explicitly stated. Text: ${text.slice(0, 20000)}`,
+          text: { format: { type: "json_schema", name: "refreshed_prices", strict: true, schema } }
+        })
+      });
+      if (!parse.ok) throw new Error(`price parse returned ${parse.status}`);
+      const parsed = JSON.parse(String(responseText(await parse.json())));
+      const seen = new Set();
+      for (const price of Array.isArray(parsed.prices) ? parsed.prices : []) {
+        const item = batch.find(entry => entry.itemId === price.itemId);
+        // Accept only if it is the page we asked about AND the model actually cited it.
+        if (!item || sourceUrlKey(price.url) !== sourceUrlKey(item.purchaseUrl) || !cited.has(sourceUrlKey(item.purchaseUrl))) continue;
+        if (!Number.isFinite(Number(price.currentPrice)) || Number(price.currentPrice) <= 0 || price.currency !== "USD") continue;
+        seen.add(item.itemId);
+        results.push({ itemId: item.itemId, observation: { price: Math.round(Number(price.currentPrice) * 100) / 100, currency: "USD", observedAt: checkedAt, availability: price.availability, source: "verified", url: item.purchaseUrl } });
+      }
+      for (const item of batch) if (!seen.has(item.itemId)) failed.push({ itemId: item.itemId, reason: "The current price could not be confirmed on the product page." });
+    } catch (error) {
+      log(`[refresh] batch failed: ${error instanceof Error ? error.message : error}`);
+      for (const item of batch) failed.push({ itemId: item.itemId, reason: "The retailer could not be reached for this item." });
+    }
+  }
+  return { checkedAt, results, failed };
+}
+
+function handlePriceRefreshRequest(req, res) {
+  let raw = "";
+  let tooLarge = false;
+  req.on("data", chunk => { raw += chunk; if (raw.length > 20_000_000) tooLarge = true; });
+  req.on("end", async () => {
+    const started = Date.now();
+    if (tooLarge) return send(res, 413, { error: "The refresh request is too large." });
+    try {
+      const { projectId, conceptId, items = [], status = "in-progress" } = JSON.parse(raw);
+      if (!conceptId) return send(res, 400, { error: "conceptId is required." });
+      // A completed project is a historical snapshot. Refused here as well as in the domain, so no
+      // caller can reprice it by going straight to the API.
+      if (status === "complete") return send(res, 409, { error: "This project is marked complete, so its prices are kept as a record of what you paid. Reopen it to check for changes." });
+      if (!Array.isArray(items) || !items.length) return send(res, 400, { error: "No items were supplied to refresh." });
+      const { checkedAt, results, failed } = await refreshProductPrices(items.slice(0, 24));
+      log(`[refresh ${projectId ?? conceptId}] ${results.length} refreshed, ${failed.length} unavailable in ${Math.round((Date.now() - started) / 1000)}s`);
+      send(res, 200, { refreshedAt: checkedAt, conceptId, results, failed });
+    } catch (error) {
+      log(`[refresh] failed: ${error instanceof Error ? error.message : error}`);
+      send(res, 500, { error: error instanceof Error ? error.message : "Prices could not be refreshed." });
+    }
+  });
+}
+
+// ── POST /api/identify-product (REQ-3) ───────────────────────────────────────
+//
+// Looks at a product photographed in a store and reports what can actually be established from it.
+// Every field is optional on purpose: an unknown dimension or price must stay absent rather than be
+// invented, and an inferred size is labelled so it cannot be mistaken for a measurement.
+function handleIdentifyProductRequest(req, res) {
+  let raw = "";
+  let tooLarge = false;
+  req.on("data", chunk => { raw += chunk; if (raw.length > 50_000_000) tooLarge = true; });
+  req.on("end", async () => {
+    const started = Date.now();
+    if (tooLarge) return send(res, 413, { error: "That photo is too large. Retake it and try again." });
+    try {
+      const { imageBase64, style = "Modern", action = "replace", userNotes = "", userPrice, roomAnalysis, targetItem } = JSON.parse(raw);
+      if (!imageBase64) return send(res, 400, { error: "A photo of the product is required." });
+      if (!apiKey) return send(res, 503, { error: "Product identification is not configured. Add OPENAI_API_KEY to the local .env file and restart the RoomMuse studio." });
+      const buffer = Buffer.from(imageBase64, "base64");
+      const info = inputImageInfo(buffer);
+      const schema = {
+        type: "object", additionalProperties: false,
+        properties: {
+          productType: { type: "string" },
+          category: { type: "string", enum: ["Furniture", "Lighting", "Textiles", "Window treatments", "Finishes", "Art", "Decor"] },
+          approximateDimensions: { type: "string" },
+          dimensionsConfidence: { type: "string", enum: ["measured", "inferred", "unknown"] },
+          compatibility: { type: "string" },
+          designImplications: { type: "array", items: { type: "string" } },
+          confidence: { type: "string", enum: ["high", "medium", "low"] },
+          suggestedName: { type: "string" }
+        },
+        required: ["productType", "category", "approximateDimensions", "dimensionsConfidence", "compatibility", "designImplications", "confidence", "suggestedName"]
+      };
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(90000),
+        body: JSON.stringify({
+          model: analysisModel,
+          input: [{ role: "user", content: [
+            { type: "input_text", text: `A shopper photographed this product in a store. They want to ${action === "add" ? "ADD it to" : "use it to REPLACE an item in"} their ${style} room design.${targetItem ? ` The item being replaced is: ${JSON.stringify(targetItem)}.` : ""}${roomAnalysis ? ` The room is: ${JSON.stringify(roomAnalysis)}.` : ""}${userNotes ? ` Their notes: ${userNotes}.` : ""}\n\nDescribe what is actually visible. State the product type and category, and whether it suits the room's style, colour, scale and materials, referring to the real room where you can. If the size cannot be established from the photo, set dimensionsConfidence to "unknown" and say so in approximateDimensions rather than guessing a number. NEVER invent a measurement, a price, a brand, or a retailer.` },
+            { type: "input_image", image_url: "data:" + info.mime + ";base64," + buffer.toString("base64") }
+          ] }],
+          text: { format: { type: "json_schema", name: "identified_product", strict: true, schema } }
+        })
+      });
+      if (!response.ok) throw new Error(`identification returned ${response.status}: ${(await response.text()).slice(0, 200)}`);
+      const parsed = JSON.parse(String(responseText(await response.json())));
+      const price = Number(userPrice);
+      const identified = {
+        productType: parsed.productType,
+        category: parsed.category,
+        approximateDimensions: parsed.dimensionsConfidence === "unknown" ? undefined : parsed.approximateDimensions,
+        dimensionsConfidence: parsed.dimensionsConfidence,
+        compatibility: parsed.compatibility,
+        designImplications: parsed.designImplications,
+        // Only the shopper can supply a price here — nothing was verified against a retailer page.
+        price: Number.isFinite(price) && price > 0 ? Math.round(price * 100) / 100 : undefined,
+        currency: Number.isFinite(price) && price > 0 ? "USD" : undefined,
+        priceSource: Number.isFinite(price) && price > 0 ? "user-entered" : undefined
+      };
+      log(`[identify] ${parsed.category} ${parsed.confidence} confidence in ${Math.round((Date.now() - started) / 1000)}s`);
+      send(res, 200, { identified, suggestedName: parsed.suggestedName, compatibility: parsed.compatibility, designImplications: parsed.designImplications, confidence: parsed.confidence });
+    } catch (error) {
+      log(`[identify] failed: ${error instanceof Error ? error.message : error}`);
+      send(res, 500, { error: error instanceof Error ? error.message : "That product could not be identified." });
+    }
+  });
+}
+
 function handleRefineRequest(req, res) {
   let raw = "";
   let tooLarge = false;
@@ -660,6 +833,8 @@ const server = http.createServer(async (req, res) => {
   if ((req.method === "GET" || req.method === "PUT") && req.url?.startsWith("/api/projects/")) return handleProjectRequest(req, res);
   if (req.method === "POST" && req.url === "/api/refine") return handleRefineRequest(req, res);
   if (req.method === "POST" && req.url === "/api/shopping-plan") return handleShoppingPlanRequest(req, res);
+  if (req.method === "POST" && req.url === "/api/prices/refresh") return handlePriceRefreshRequest(req, res);
+  if (req.method === "POST" && req.url === "/api/identify-product") return handleIdentifyProductRequest(req, res);
   if (req.method !== "POST" || req.url !== "/api/design") return send(res, 404, { error: "Not found" });
   let raw = "";
   let tooLarge = false;
