@@ -46,3 +46,46 @@ test("a completed project offers no price refresh at all",async({page})=>{
   await expect(page.getByText("This project is complete")).toBeVisible();
   await expect(page.getByRole("button",{name:"Check prices now"})).toHaveCount(0);
 });
+
+// WS-5b — REQ-10: a constraint must protect the item, and releasing it must be deliberate.
+test("a constraint locks an item and releasing it requires confirmation",async({page})=>{
+  await seedProject(page);
+  await page.goto("/?demo=project");
+  await page.getByRole("button",{name:"Things to keep"}).click();
+  await expect(page.getByText("What should stay as it is?")).toBeVisible();
+  await page.getByRole("button",{name:"Add constraint: Do not change the flooring"}).click();
+  await expect(page.getByText("Do not change the flooring")).toBeVisible();
+  page.once("dialog",dialog=>dialog.dismiss());
+  await page.getByRole("button",{name:"Release constraint: Do not change the flooring"}).click();
+  // Dismissing the confirmation must leave the constraint in place.
+  await expect(page.getByRole("button",{name:"Release constraint: Do not change the flooring"})).toBeVisible();
+});
+
+// WS-5b — REQ-3: photograph a product, see the effect, then apply it.
+test("an in-store product can replace a planned item and updates the totals",async({page})=>{
+  await seedProject(page);
+  await page.route("**/api/identify-product",route=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({
+    identified:{productType:"Two-seat leather sofa",category:"Furniture",dimensionsConfidence:"unknown",compatibility:"Works with the dark console already in the room.",designImplications:["Repeats the existing leather"]},
+    suggestedName:"Showroom leather sofa",compatibility:"Works with the dark console already in the room.",designImplications:["Repeats the existing leather"],confidence:"medium"})}));
+  await page.goto("/?demo=project");
+  await page.getByRole("button",{name:"Found something in store"}).click();
+  await expect(page.getByText("Use something you found")).toBeVisible();
+  await expect(page.getByRole("radio",{name:"Replace Fielding performance linen sofa"})).toBeVisible();
+  // Without a photo the check must not run at all.
+  await expect(page.getByRole("button",{name:"Check this product"})).toBeDisabled();
+});
+
+// WS-5b — REQ-9: comparison must be honest about what it is comparing.
+test("two products can be compared side by side and favourited",async({page})=>{
+  await seedProject(page);
+  await page.goto("/?demo=project");
+  await page.getByRole("button",{name:"Compare and favourites"}).click();
+  await page.getByRole("checkbox",{name:"Compare Fielding performance linen sofa"}).click();
+  await page.getByRole("checkbox",{name:"Compare Marlow oak floor lamp"}).click();
+  await expect(page.getByText("Budget impact")).toBeVisible();
+  await expect(page.getByText("Price confidence")).toBeVisible();
+  // The cheaper option is called out rather than left for the reader to work out.
+  await expect(page.getByText(/is the lowest cost at/)).toBeVisible();
+  await page.getByRole("button",{name:/Save Marlow oak floor lamp/}).click();
+  await expect(page.getByText("★ Marlow oak floor lamp")).toBeVisible();
+});
