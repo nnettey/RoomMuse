@@ -124,6 +124,8 @@ table and post a §8 handoff note naming every affected workstream.
 | 2026-08-16 | WS-0 | `baseline/pre-v2` tagged at `2379fb2`; `roommuse-v2/integration` cut; `ws/0-stabilize` branched. |
 | 2026-08-16 | WS-0 | D1/D10/D11/D12 fixed (commit `cf839a4`). `src/runtimeEnv.ts` added; `typecheck` clean, `test:unit` 16/16. |
 | 2026-08-16 | WS-0 | e2e baseline established **and it is red**: 6 failed / 3 passed, identical on `baseline/pre-v2` and on `ws/0-stabilize`. Stale spec, not a regression. See §10 and risk R10. |
+| 2026-08-16 | WS-0 | e2e spec repaired: 8 passed / 1 failed. Remaining failure is the genuine D15 defect, left red on purpose. WS-0 merged to `roommuse-v2/integration`. |
+| 2026-08-16 | WS-3 | **T1 complete — the seeded-product fallback is gone from every production path.** D15 and D2 fixed. Two leaks closed, the second found by a new test. All gates green: typecheck clean, unit 37/37, e2e 9/9. |
 
 ---
 
@@ -137,7 +139,13 @@ table and post a §8 handoff note naming every affected workstream.
 | WS-0 | `src/ProjectScreens.tsx` | D10: 3× U+FFFD and 2× ASCII-substituted glyphs restored. Character fixes only. | Not yet |
 | WS-0 | `App.tsx` | D11: ~135 lines of never-rendered duplicate UI removed; re-export retained. | Not yet |
 | WS-0 | `scripts/start-roommuse.ps1` | D12: reads `.env`, exports `EXPO_PUBLIC_API_URL`, prints which source it used. | Not yet |
-| WS-0 | `tests/runtime.test.ts` (new), `package.json` | 5 tests pinning demo-route detection on every runtime shape. **`package.json` script line touched — noted for WS-6 (§8).** | Not yet |
+| WS-0 | `tests/runtime.test.ts` (new), `package.json` | 5 tests pinning demo-route detection on every runtime shape. **`package.json` script line touched — noted for WS-6 (§8).** | Merged |
+| WS-0 | `e2e/roommuse.spec.ts` | Three stale locators/navigation steps corrected. **WS-6-owned file — see §8.** | Merged |
+| WS-3 | `src/domain.ts` | **T1.** New `conceptItems()`; a live response is now the only source of shopping items, applied to all three concepts including ones with no reported variant. Seeded products cannot reach a live project. | Not yet |
+| WS-3 | `src/designService.ts` | T1. The no-image path returned a seeded `demoConcept` after a fake 2.2s delay; now throws an honest error. **WS-2-owned file — see §8.** | Not yet |
+| WS-3 | `src/EnhancedScreens.tsx` | T1. Honest empty-plan state so an unresolved plan explains itself instead of rendering blank. **WS-5-owned file — see §8.** | Not yet |
+| WS-3 | `e2e/helpers.ts`, `e2e/roommuse.spec.ts` | T1. `apiResponse()` now returns realistic verified server products with alternatives; journey 1 exercises those instead of seeds. **WS-6-owned files — see §8.** | Not yet |
+| WS-3 | `tests/domain.test.ts` | 4 tests: empty live plan on every concept, server items reaching all concepts with concept-scoped ids, no seeded name reachable from a live project, demo projects still seeded. | Not yet |
 
 ---
 
@@ -150,6 +158,10 @@ Format: `[date] WS-x → WS-y — request/blocker — status`
 | [2026-08-16] WS-0 → WS-6 — WS-0 added one line to `package.json` `test:unit` to run `tests/runtime.test.ts`. `package.json` is WS-6-owned; recording rather than asking, since WS-6 has not started. | Informational |
 | [2026-08-16] WS-0 → WS-6 — **The e2e suite is red at baseline (§10).** It cannot gate WS-2..WS-5 until repaired. Recommend pulling the spec repair forward ahead of the parallel workstreams instead of leaving it to WS-6. **Awaiting user decision.** | **Open — blocking the gating strategy** |
 | [2026-08-16] WS-0 → WS-5 — `src/RoomMuseApp.tsx` and `src/ProjectScreens.tsx` are released to WS-5. WS-0 changed only the crash guard and the corrupted characters; no layout, copy, or behaviour was altered. | Ready |
+| [2026-08-16] WS-0/WS-3 → WS-6 — `e2e/**` and `package.json` were edited ahead of WS-6 because the suite had to be trustworthy before the seed fallback could be removed safely (risk R10). Every change is justified in §10 and in the commit messages. WS-6 should review rather than redo. | Informational |
+| [2026-08-16] WS-3 → WS-2 — `src/designService.ts`: the no-image branch now throws instead of returning a seeded `demoConcept`. Taken by WS-3 because it is the same fabricated-data leak as T1 and could not be left open. WS-2 owns the file from here. | Released |
+| [2026-08-16] WS-3 → WS-5 — `src/EnhancedScreens.tsx`: one empty-plan notice added to `ShoppingScreen` plus one style. Removing the seed fallback without it would have shown users a blank plan with no explanation. WS-5 owns the file from here and should fold this into T7's fuller unresolved/provenance treatment. | Released |
+| [2026-08-16] WS-3 → WS-2 — **Now that the client no longer fabricates, an empty plan is a visible product outcome.** The value of `/api/shopping-plan` and its unresolved-state contract went up accordingly. | Informational |
 
 ---
 
@@ -173,9 +185,9 @@ Mirrors `PLAN.md` §10; update here as they resolve.
 | Gate | Baseline at `baseline/pre-v2` (measured 2026-08-16) | Current (`ws/0-stabilize`) |
 |---|---|---|
 | `npm run typecheck` | Pass | Pass |
-| `npm run test:unit` | Pass 11/11 | Pass 16/16 (5 added) |
-| `npm run test:e2e` | **FAIL — 6 failed / 3 passed** (measured on the untouched baseline tag) | FAIL — 6 failed / 3 passed, **identical set: no regression from WS-0** |
-| `npm run test:visual` | Not run — blocked behind the red e2e suite | — |
+| `npm run test:unit` | Pass 11/11 | **Pass 37/37** (9 added by WS-0/WS-3, 3 files) |
+| `npm run test:e2e` | **FAIL — 6 failed / 3 passed** (measured on the untouched baseline tag) | **Pass 9/9** |
+| `npm run test:visual` | Not run — blocked behind the red e2e suite | Not run — WS-6 re-baselines; UI has changed (empty-plan notice) |
 | `npm run test:live` (manual, real key) | Does not exist yet — WS-2 | — |
 
 ### The e2e regression net is red at baseline — read this before relying on it

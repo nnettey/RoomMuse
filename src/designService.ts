@@ -1,12 +1,13 @@
-import { demoConcept } from "./data";
 import { DesignConcept, DesignStyle } from "./types";
 import { API_BASE_URL as API_URL } from "./runtimeEnv";
 
 export async function createDesign(photoBase64: string | string[] | undefined, style: DesignStyle): Promise<DesignConcept> {
   const imageBase64s = Array.isArray(photoBase64) ? photoBase64.filter(Boolean).slice(0, 3) : photoBase64 ? [photoBase64] : [];
+  // Without a room image there is nothing to ground a design in. This used to return a seeded demo
+  // concept after a fake 2.2s delay, which is indistinguishable from a real result in the UI and is
+  // exactly the fabricated-data path REQ-11 forbids. Fail honestly instead.
   if (!imageBase64s.length) {
-    await new Promise(resolve => setTimeout(resolve, 2200));
-    return demoConcept(style);
+    throw new Error("The room photo could not be read. Retake the scan and try again.");
   }
 
   const controller = new AbortController();
