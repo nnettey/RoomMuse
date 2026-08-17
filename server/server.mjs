@@ -54,7 +54,19 @@ const fallbackPlans = {
 };
 function roomPlan(analysis) {
   const type = String(analysis.roomType ?? "").toLowerCase();
-  const key = Object.keys(fallbackPlans).find(name => name !== "default" && type.includes(name)) ?? "default";
+  // Choose by EARLIEST mention, not by object-key order, and let a primary living space win.
+  //
+  // "Open-plan living room with an adjoining home-office zone" contains "office", so key-order
+  // matching returned the office-only plan and dropped the living area — the room the user
+  // actually photographed. Open-plan spaces name a secondary zone constantly, so this matters.
+  const specialised = Object.keys(fallbackPlans)
+    .filter(name => name !== "default" && type.includes(name))
+    .sort((a, b) => type.indexOf(a) - type.indexOf(b))[0];
+  const livingAt = Math.min(...["living", "family room", "great room", "lounge"].map(word => {
+    const at = type.indexOf(word);
+    return at < 0 ? Number.POSITIVE_INFINITY : at;
+  }));
+  const key = !specialised || livingAt < type.indexOf(specialised) ? "default" : specialised;
   return fallbackPlans[key].map(([name, category, description, quantity, estimatedUnitPrice]) => ({ name, category, description, quantity, estimatedUnitPrice, dimensions: "Confirm against field measurements", finish: "Coordinate with the selected palette", rationale: `Recommended for the photographed ${analysis.roomType ?? "room"}.`, priority: "High impact", searchQuery: name }));
 }
 function isDirectProductUrl(value) {
@@ -87,6 +99,28 @@ function isDirectProductUrl(value) {
     return false;
   }
 }
+// Shared by the room analysis and the per-variation concept brief so both describe items identically.
+const shoppingItemsSchema = {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          category: { type: "string", enum: ["Furniture", "Lighting", "Textiles", "Window treatments", "Finishes", "Art", "Decor"] },
+          description: { type: "string" },
+          quantity: { type: "integer" },
+          estimatedUnitPrice: { type: "number" },
+          dimensions: { type: "string" },
+          finish: { type: "string" },
+          rationale: { type: "string" },
+          priority: { type: "string", enum: ["Essential", "High impact", "Finishing touch"] },
+          searchQuery: { type: "string" },
+          retainedExisting: { type: "boolean" }
+        },
+        required: ["name", "category", "description", "quantity", "estimatedUnitPrice", "dimensions", "finish", "rationale", "priority", "searchQuery", "retainedExisting"]
+      }
+    };
 function sourceShoppingItems(analysis) {
   const source = Array.isArray(analysis.shoppingItems) && analysis.shoppingItems.length ? analysis.shoppingItems : roomPlan(analysis);
   return source.slice(0, 10);
@@ -119,9 +153,24 @@ function isAllowedRetailerSource(value) {
     return false;
   }
 }
-async function resolveProductBatch(entries, style) {
+// Free-text guidance assembled from the project's budget and constraints. Threaded into both the
+// room analysis and the product search so the plan is shaped by them up front, rather than being
+// generated blind and filtered afterwards (REQ-2, REQ-10).
+function planContext(context = {}) {
+  const { budget, constraints = [], retainedItems = [], roomDimensions } = context;
+  const parts = [];
+  if (Number(budget?.total) > 0) parts.push(`The whole-room budget is $${Math.round(Number(budget.total))} USD. Choose pieces that fit inside it as a complete plan; spend the largest share on the anchor pieces and keep finishing touches modest.`);
+  const active = constraints.filter(c => c && !c.releasedAt).map(c => c.label).filter(Boolean);
+  if (active.length) parts.push(`The user has fixed these decisions and they must be respected: ${active.join("; ")}. Do NOT propose replacing anything covered by them.`);
+  if (retainedItems.length) parts.push(`These existing items are being kept and must not appear as purchases: ${retainedItems.join(", ")}.`);
+  if (roomDimensions) parts.push(`Stated room dimensions: ${roomDimensions}.`);
+  return parts.join(" ");
+}
+
+async function resolveProductBatch(entries, style, context = {}) {
   const empty = new Map(entries.map(entry => [entry.requestIndex, []]));
   if (!apiKey || !entries.length) return empty;
+  const guidance = planContext(context);
   const productSchema = {
     type: "object",
     additionalProperties: false,
@@ -175,7 +224,7 @@ async function resolveProductBatch(entries, style) {
       body: JSON.stringify({
         model: productSearchModel,
         tools: [{ type: "web_search", search_context_size: "medium", user_location: { type: "approximate", country: "US" } }],
-        input: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.`
+        input: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. ${guidance} Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.`
       })
     });
     if (!searchResponse.ok) throw new Error(`product search returned ${searchResponse.status}: ${(await searchResponse.text()).slice(0, 180)}`);
@@ -219,20 +268,20 @@ async function resolveProductBatch(entries, style) {
     return empty;
   }
 }
-async function resolveShoppingItems(analysis, style, conceptId) {
+async function resolveShoppingItems(analysis, style, conceptId, context = {}) {
   const checkedAt = new Date().toISOString();
   const source = sourceShoppingItems(analysis);
   const batches = [];
   for (let index = 0; index < source.length; index += 2) {
     batches.push(source.slice(index, index + 2).map((raw, offset) => ({ requestIndex: index + offset, raw })));
   }
-  const resolvedBatches = await Promise.all(batches.map(batch => resolveProductBatch(batch, style)));
+  const resolvedBatches = await Promise.all(batches.map(batch => resolveProductBatch(batch, style, context)));
   const choicesByIndex = new Map();
   for (const batch of resolvedBatches) for (const [index, choices] of batch) choicesByIndex.set(index, choices);
   const unmatched = source
     .map((raw, requestIndex) => ({ requestIndex, raw }))
     .filter(entry => !(choicesByIndex.get(entry.requestIndex)?.length));
-  const fallbackBatches = await Promise.all(unmatched.map(entry => resolveProductBatch([entry], style)));
+  const fallbackBatches = await Promise.all(unmatched.map(entry => resolveProductBatch([entry], style, context)));
   for (const batch of fallbackBatches) {
     for (const [index, choices] of batch) if (choices.length) choicesByIndex.set(index, choices);
   }
@@ -268,7 +317,9 @@ async function resolveShoppingItems(analysis, style, conceptId) {
       availability: product.availability,
       priceStatus: "verified",
       lastPriceCheckedAt: checkedAt,
-      budgetTier: product.tier
+      budgetTier: product.tier,
+      provenance: "verified",
+      priceHistory: [{ price: Math.round(Number(product.currentPrice) * 100) / 100, currency: "USD", observedAt: checkedAt, availability: product.availability, source: "verified", url: product.directUrl }]
     }));
     return {
       id: `${conceptId}-room-${index}`,
@@ -283,7 +334,20 @@ async function resolveShoppingItems(analysis, style, conceptId) {
       matchIndicators: [`Grounded in photographed ${analysis.roomType ?? "room"}`, `Matches ${style} direction`],
       availability: primary?.availability ?? "No exact product page and current price could be verified. Purchase link withheld.",
       originalSelection: base,
-      alternatives
+      alternatives,
+      // REQ-11 provenance. "verified" means: confirmed on the retailer's own product page, with a
+      // current price, at a recorded time. Anything else is "generated" — a design recommendation
+      // with no purchasable product attached — and carries an explicit unresolved reason so the UI
+      // can say so rather than dressing an estimate up as a real listing.
+      provenance: verified ? "verified" : "generated",
+      priceHistory: verified
+        ? [{ price: base.unitPrice, currency: "USD", observedAt: checkedAt, availability: primary.availability, source: "verified", url: base.purchaseUrl }]
+        : [],
+      unresolved: verified ? undefined : {
+        reason: choices.length ? "no-verified-price" : "no-match",
+        note: `No retailer product page with a confirmed current price could be verified for this ${category.toLowerCase()} piece.`,
+        lastAttemptedAt: checkedAt
+      }
     };
   });
 }
@@ -382,7 +446,7 @@ function fallbackRoomAnalysis() {
   };
 }
 
-async function analyzeRoom(imageBuffer, imageMime, style, additionalImages = []) {
+async function analyzeRoom(imageBuffer, imageMime, style, additionalImages = [], context = {}) {
   if (!apiKey) return fallbackRoomAnalysis();
   const fields = {
     roomType: { type: "string" },
@@ -392,27 +456,7 @@ async function analyzeRoom(imageBuffer, imageMime, style, additionalImages = [])
     retainedElements: { type: "array", items: { type: "string" } },
     circulation: { type: "string" },
     confidence: { type: "string" },
-    shoppingItems: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          name: { type: "string" },
-          category: { type: "string", enum: ["Furniture", "Lighting", "Textiles", "Window treatments", "Finishes", "Art", "Decor"] },
-          description: { type: "string" },
-          quantity: { type: "integer" },
-          estimatedUnitPrice: { type: "number" },
-          dimensions: { type: "string" },
-          finish: { type: "string" },
-          rationale: { type: "string" },
-          priority: { type: "string", enum: ["Essential", "High impact", "Finishing touch"] },
-          searchQuery: { type: "string" },
-          retainedExisting: { type: "boolean" }
-        },
-        required: ["name", "category", "description", "quantity", "estimatedUnitPrice", "dimensions", "finish", "rationale", "priority", "searchQuery", "retainedExisting"]
-      }
-    }
+    shoppingItems: shoppingItemsSchema
   };
   let failure;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -424,7 +468,7 @@ async function analyzeRoom(imageBuffer, imageMime, style, additionalImages = [])
         body: JSON.stringify({
           model: analysisModel,
           input: [{ role: "user", content: [
-            { type: "input_text", text: `Analyze only visible evidence in these room images, then propose a ${style} redesign shopping plan specifically for this room. Include 6-10 pieces that are visibly retained or explicitly proposed for this room and design. Do not use a generic fixed list. Never invent exact room measurements.` },
+            { type: "input_text", text: `Analyze only visible evidence in these room images, then propose a ${style} redesign shopping plan specifically for this room. Include 6-10 pieces that are visibly retained or explicitly proposed for this room and design. Do not use a generic fixed list. Never invent exact room measurements. ${planContext(context)}` },
             { type: "input_image", image_url: "data:" + imageMime + ";base64," + imageBuffer.toString("base64") },
             ...additionalImages.map(image => ({ type: "input_image", image_url: "data:" + image.mime + ";base64," + image.buffer.toString("base64") }))
           ] }],
@@ -450,6 +494,74 @@ async function analyzeRoom(imageBuffer, imageMime, style, additionalImages = [])
     }
   }
   throw new Error("Room analysis could not produce a grounded shopping plan: " + (failure instanceof Error ? failure.message : failure));
+}
+
+// The semantics behind the three existing variation names. Kept here rather than invented per call
+// so the render prompt, the brief, and the report all describe the same three directions.
+const conceptDirections = {
+  Signature: "balanced, broadly appealing and moderately layered: mid-tone woods, mixed materials, one or two sculptural moments",
+  Refined: "quiet, tonal and timeless: lower visual complexity, pale or matte finishes, simple silhouettes, fewer but better pieces",
+  Expressive: "bold but practical: stronger contrast, curved or sculptural furniture, a decorative lighting moment, richer textures and a saturated accent"
+};
+
+// Produces the shopping brief for ONE variation.
+//
+// This is what stops the three concepts sharing a single list. They keep the same functional roles
+// — the room still needs a sofa, a rug, task lighting — but the specific pieces, materials and
+// finishes are asked to differ meaningfully by direction (REQ-5). Falls back to the shared analysis
+// brief if the call fails, which degrades to the previous behaviour rather than to nothing.
+async function buildConceptBrief(analysis, style, conceptName, context = {}) {
+  const shared = sourceShoppingItems(analysis);
+  if (!apiKey) return shared;
+  const schema = { type: "object", additionalProperties: false, properties: { shoppingItems: shoppingItemsSchema }, required: ["shoppingItems"] };
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(90000),
+      body: JSON.stringify({
+        model: analysisModel,
+        input: `Room analysis: ${JSON.stringify(analysis)}.\n\nThe shared room brief is: ${JSON.stringify(shared)}.\n\nRewrite it as the shopping brief for the "${conceptName}" variation of a ${style} redesign. This direction is ${conceptDirections[conceptName] ?? conceptDirections.Signature}.\n\nKeep the same functional roles the room needs and keep every piece grounded in the photographed room. Change the specific pieces, materials, finishes, silhouettes and priorities so this variation is meaningfully different from the other two — a shopper must be able to see why they are different plans, not the same plan relabelled. Never invent exact room measurements. ${planContext(context)}`,
+        text: { format: { type: "json_schema", name: "concept_shopping_brief", strict: true, schema } }
+      })
+    });
+    if (!response.ok) throw new Error(`concept brief returned ${response.status}: ${(await response.text()).slice(0, 180)}`);
+    const parsed = JSON.parse(String(responseText(await response.json())));
+    return Array.isArray(parsed.shoppingItems) && parsed.shoppingItems.length ? parsed.shoppingItems.slice(0, 10) : shared;
+  } catch (error) {
+    log(`[brief ${conceptName}] falling back to the shared room brief: ${error instanceof Error ? error.message : error}`);
+    return shared;
+  }
+}
+
+// POST /api/shopping-plan — resolve products for ONE chosen variation (decision A2).
+//
+// Separating this from /api/design is what lets the plan be concept-specific, budget-aware and
+// constraint-aware, and takes the product search off the generation critical path.
+function handleShoppingPlanRequest(req, res) {
+  let raw = "";
+  let tooLarge = false;
+  req.on("data", chunk => { raw += chunk; if (raw.length > 20_000_000) tooLarge = true; });
+  req.on("end", async () => {
+    const started = Date.now();
+    if (tooLarge) return send(res, 413, { error: "The shopping plan request is too large." });
+    try {
+      const { conceptId, conceptName = "Signature", style = "Modern", roomAnalysis, budget, constraints, retainedItems, roomDimensions } = JSON.parse(raw);
+      if (!conceptId) return send(res, 400, { error: "conceptId is required." });
+      if (!roomAnalysis || typeof roomAnalysis !== "object") return send(res, 400, { error: "roomAnalysis is required. Generate the design before building its shopping plan." });
+      const context = { budget, constraints, retainedItems, roomDimensions };
+      log(`[shopping-plan ${conceptId}] ${style} ${conceptName} started`);
+      const brief = await buildConceptBrief(roomAnalysis, style, conceptName, context);
+      const items = await resolveShoppingItems({ ...roomAnalysis, shoppingItems: brief }, style, conceptId, context);
+      const unresolvedCount = items.filter(item => item.provenance !== "verified").length;
+      const projectedSpend = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+      log(`[shopping-plan ${conceptId}] ${items.length} items, ${unresolvedCount} unresolved, $${Math.round(projectedSpend)} in ${Math.round((Date.now() - started) / 1000)}s`);
+      send(res, 200, { conceptId, conceptName, items, resolvedAt: new Date().toISOString(), unresolvedCount, projectedSpend: Math.round(projectedSpend * 100) / 100 });
+    } catch (error) {
+      log(`[shopping-plan] failed after ${Math.round((Date.now() - started) / 1000)}s: ${error instanceof Error ? error.message : error}`);
+      send(res, 500, { error: error instanceof Error ? error.message : "The shopping plan could not be built." });
+    }
+  });
 }
 
 function buildDesignReport(analysis, style, name) {
@@ -547,6 +659,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url?.startsWith("/designs/")) return serveDesignImage(req, res);
   if ((req.method === "GET" || req.method === "PUT") && req.url?.startsWith("/api/projects/")) return handleProjectRequest(req, res);
   if (req.method === "POST" && req.url === "/api/refine") return handleRefineRequest(req, res);
+  if (req.method === "POST" && req.url === "/api/shopping-plan") return handleShoppingPlanRequest(req, res);
   if (req.method !== "POST" || req.url !== "/api/design") return send(res, 404, { error: "Not found" });
   let raw = "";
   let tooLarge = false;
@@ -557,7 +670,8 @@ const server = http.createServer(async (req, res) => {
     if (tooLarge) return send(res, 413, { error: "The room scan is too large. Retake it and try again." });
     let beforePath;
     try {
-      const { imageBase64, imageBase64s = [], style = "Modern" } = JSON.parse(raw);
+      const { imageBase64, imageBase64s = [], style = "Modern", budget, constraints, retainedItems, roomDimensions } = JSON.parse(raw);
+      const context = { budget, constraints, retainedItems, roomDimensions };
       const encodedScans = (Array.isArray(imageBase64s) && imageBase64s.length ? imageBase64s : [imageBase64]).filter(Boolean).slice(0, 3);
       if (!encodedScans.length) return send(res, 400, { error: "At least one room image is required" });
       const id = randomUUID();
@@ -570,9 +684,9 @@ const server = http.createServer(async (req, res) => {
       writeFileSync(beforePath, input);
       log("[design " + id + "] " + style + " started");
       const conceptNames = ["Signature", "Refined", "Expressive"];
-      const roomAnalysisPromise = analyzeRoom(input, info.mime, style, scans.slice(1));
+      const roomAnalysisPromise = analyzeRoom(input, info.mime, style, scans.slice(1), context);
       const renderPromise = Promise.allSettled(conceptNames.map(conceptName => renderRoom(scans, style, conceptName)));
-      const shoppingPromise = roomAnalysisPromise.then(analysis => resolveShoppingItems(analysis, style, id));
+      const shoppingPromise = roomAnalysisPromise.then(analysis => resolveShoppingItems(analysis, style, id, context));
       const [roomAnalysis, renderResults, shoppingItems] = await Promise.all([roomAnalysisPromise, renderPromise, shoppingPromise]);
       const primary = renderResults[0];
       if (!primary || primary.status === "rejected") throw primary?.reason ?? new Error("The primary design render failed.");
