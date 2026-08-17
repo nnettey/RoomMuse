@@ -73,3 +73,17 @@ export async function refreshPrices(input:{projectId:string;conceptId:string;sta
     throw error;
   }finally{clearTimeout(timer)}
 }
+
+// ── In-store product identification (REQ-3) ──────────────────────────────────
+export type IdentifyResult={identified:{productType?:string;category?:string;approximateDimensions?:string;dimensionsConfidence?:"measured"|"inferred"|"unknown";compatibility?:string;designImplications?:string[];price?:number;currency?:"USD";priceSource?:"user-entered"|"discovered"};suggestedName:string;compatibility:string;designImplications:string[];confidence:"high"|"medium"|"low"};
+export async function identifyProduct(input:{imageBase64:string;style?:string;action:"replace"|"add";userNotes?:string;userPrice?:number;roomAnalysis?:unknown;targetItem?:unknown}):Promise<IdentifyResult>{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),180_000);
+  try{
+    const response=await fetch(API_URL+"/api/identify-product",{method:"POST",headers:{"Content-Type":"application/json"},signal:controller.signal,body:JSON.stringify(input)});
+    if(!response.ok){const payload=await response.json().catch(()=>({})) as{error?:string};throw new Error(payload.error??"That product could not be identified. Try another photo.")}
+    return response.json() as Promise<IdentifyResult>;
+  }catch(error){
+    if(error instanceof Error&&error.name==="AbortError")throw new Error("Checking that product took too long. Try again when your connection is stable.");
+    throw error;
+  }finally{clearTimeout(timer)}
+}
