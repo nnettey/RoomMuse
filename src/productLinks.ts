@@ -9,7 +9,7 @@ const retailerProductPaths: [string, RegExp][] = [
   ["westelm.com", /^\/products\//],
   ["potterybarn.com", /^\/products\//],
   ["crateandbarrel.com", /\/[sf]\d+$/],
-  ["lampsplus.com", /^\/p\//],
+  ["lampsplus.com", /^\/(p|products)\//],
   ["rugsusa.com", /^\/products\//],
 ];
 

@@ -12,3 +12,28 @@ test("product links reject search and category pages",()=>{assert.equal(isDirect
 test("video capture requests microphone access and includes an in-app permission back button",()=>{const camera=readFileSync("src/EnhancedScreens.tsx","utf8");const app=readFileSync("app.json","utf8");assert.match(camera,/useMicrophonePermissions/);assert.match(camera,/await allowMicrophone/);assert.match(camera,/MediaRecorder/);assert.match(camera,/recordWeb/);assert.match(camera,/webVideoFrame/);assert.doesNotMatch(camera,/mode=\{captureMode\} mute/);assert.match(camera,/permission\.granted\).*accessibilityLabel="Go back"/);assert.match(app,/NSMicrophoneUsageDescription/);assert.match(app,/microphonePermission/)});
 test("system back stays inside RoomMuse",()=>{const source=readFileSync("src/RoomMuseApp.tsx","utf8");assert.match(source,/BackHandler\.addEventListener\("hardwareBackPress"/);assert.match(source,/addEventListener\("popstate"/);assert.match(source,/deals:"project"/);assert.match(source,/capture:"home"/)});
 test("retailer data uses live web search and never fabricates links or discounts",()=>{const server=readFileSync("server/server.mjs","utf8");const deals=readFileSync("src/ProjectScreens.tsx","utf8");const domain=readFileSync("src/domain.ts","utf8");assert.match(server,/tools: \[\{ type: "web_search"/);assert.match(server,/model: productSearchModel/);assert.doesNotMatch(server,/api\.openai\.com\/v1\/chat\/completions/);assert.match(server,/const imageModel = process\.env\.OPENAI_IMAGE_MODEL \?\? "gpt-image-2"/);assert.match(server,/annotation\.type === "url_citation"/);assert.match(server,/Use ONLY these exact cited product URLs/);assert.match(server,/isAllowedRetailerSource\(url\)/);assert.match(server,/sourceUrls\.has\(sourceUrlKey\(product\.directUrl\)\)/);assert.match(server,/Promise\.all\(batches\.map\(batch\s*=>\s*resolveProductBatch\(batch, style\)\)\)/);assert.doesNotMatch(server,/mapWithConcurrency/);assert.doesNotMatch(server,/resolveProductChoices/);assert.match(server,/Promise\.all\(unmatched\.map\(entry\s*=>\s*resolveProductBatch\(\[entry\], style\)\)\)/);assert.match(server,/priceStatus: verified \? "verified" : "estimate"/);assert.match(server,/budgetTier: primary\?\.tier/);assert.match(server,/budgetTier: product\.tier/);assert.doesNotMatch(server,/wayfair\.com\/keyword/);assert.doesNotMatch(server,/homedepot\.com\/s\//);assert.doesNotMatch(deals,/\.82\+n\*\.03/);assert.match(deals,/a\.priceStatus==="verified"/);assert.match(deals,/isDirectProductUrl\(a\.purchaseUrl\)/);assert.doesNotMatch(domain,/const factor=/);assert.match(domain,/a\.budgetTier===tier/);assert.match(domain,/isDirectProductUrl\(a\.purchaseUrl\)/)});
+
+// Real product URLs observed from a live search on 2026-08-16. Every one of these must be
+// accepted: the /^\/p\// pattern for Lamps Plus rejected its /products/ form, which silently
+// dropped a verified product from the plan.
+test("verified live product URLs are accepted",()=>{for(const url of[
+  "https://www.homedepot.com/p/336343453",
+  "https://www.target.com/p/-/A-1011806485",
+  "https://www.walmart.com/ip/10981207219",
+  "https://www.rugsusa.com/products/seed-ivory-natural-handwoven-jute-rug?variant=50093398655270",
+  "https://www.lampsplus.com/p/dainolite-finley-60-inch-high-matte-black-modern-floor-lamp__6622h",
+  "https://www.lampsplus.com/products/regency-hill-65-and-one-half-inch-leisa-sand-finish-modern-floor-lamp__273a9.html"
+])assert.equal(isDirectProductUrl(url),true,"should accept "+url)});
+// Widening a pattern must not let a category or search page through — that is the failure the
+// gate exists to prevent, so the negative cases are pinned alongside the positive ones.
+test("widened patterns still reject non-product pages",()=>{for(const url of[
+  "https://www.lampsplus.com/products/",
+  "https://www.lampsplus.com/search/?q=floor+lamp",
+  "https://www.lampsplus.com/p/",
+  "https://www.homedepot.com/b/Lighting-Lamps/N-5yc1vZc7oj",
+  "https://www.target.com/c/furniture/-/N-5xtvd",
+  "https://www.rugsusa.com/collections/jute-rugs"
+])assert.equal(isDirectProductUrl(url),false,"should reject "+url)});
+// The pattern table is duplicated between the Node server and the app, which cannot share a
+// module. Drift would mean the server accepts a link the app then refuses to open, or worse.
+test("server and client retailer pattern tables stay identical",()=>{const grab=(source:string)=>{const start=source.indexOf("retailerPatterns"),body=source.slice(start,source.indexOf("]",source.indexOf("crateandbarrel",start)+200));return body.replace(/\s|,$/g,"")};const server=readFileSync("server/server.mjs","utf8"),client=readFileSync("src/productLinks.ts","utf8");const clientBody=client.slice(client.indexOf("retailerProductPaths"),client.indexOf("];",client.indexOf("retailerProductPaths"))).replace(/\s|,$/g,"");for(const domain of["homedepot.com","lowes.com","target.com","walmart.com","ikea.com","wayfair.com","westelm.com","potterybarn.com","crateandbarrel.com","lampsplus.com","rugsusa.com"]){const pattern=(s:string)=>{const i=s.indexOf('"'+domain+'"');assert.ok(i>=0,domain+" missing");return s.slice(i+domain.length+2,s.indexOf("]",i))};assert.equal(pattern(grab(server)),pattern(clientBody),"pattern drift for "+domain)}});

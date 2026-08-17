@@ -64,6 +64,10 @@ function isDirectProductUrl(value) {
     const path = url.pathname.toLowerCase().replace(/\/+$/, "");
     const blocked = ["/search", "/s/", "/b/", "/keyword", "/collections/", "/category/", "/categories/", "/browse/"];
     if (url.protocol !== "https:" || !hostname.includes(".") || !path || blocked.some(part => path.includes(part)) || ["q", "query", "keyword"].some(key => url.searchParams.has(key))) return false;
+    // Per-retailer product-page shapes. Widen ONLY with evidence of a real product URL being
+    // wrongly rejected — a pattern that is too loose lets a category page through as a product,
+    // which is the failure this whole gate exists to prevent.
+    // KEEP IN SYNC with src/productLinks.ts; a test asserts the two tables are identical.
     const retailerPatterns = [
       ["homedepot.com", /^\/p\//],
       ["lowes.com", /^\/pd\//],
@@ -74,7 +78,7 @@ function isDirectProductUrl(value) {
       ["westelm.com", /^\/products\//],
       ["potterybarn.com", /^\/products\//],
       ["crateandbarrel.com", /\/[sf]\d+$/],
-      ["lampsplus.com", /^\/p\//],
+      ["lampsplus.com", /^\/(p|products)\//],
       ["rugsusa.com", /^\/products\//]
     ];
     const retailer = retailerPatterns.find(([domain]) => hostname === domain || hostname.endsWith(`.${domain}`));
