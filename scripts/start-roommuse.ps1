@@ -61,12 +61,37 @@ function Wait-ForHealth {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+function Get-DotEnvValue {
+  param([string]$Path, [string]$Name)
+
+  if (-not (Test-Path $Path)) { return $null }
+  $line = Get-Content $Path | Where-Object { $_ -match "^\s*$Name\s*=" } | Select-Object -Last 1
+  if (-not $line) { return $null }
+  return ($line -replace "^\s*$Name\s*=\s*", '').Trim().Trim('"').Trim("'")
+}
+
 $wifiIp = Get-PrimaryWifiIPv4
 $expoPort = 8081
+$envFile = Join-Path $repoRoot '.env'
+
 $apiPort = [int]$env:ROOMMUSE_API_PORT
+if (-not $apiPort) { $apiPort = [int](Get-DotEnvValue -Path $envFile -Name 'PORT') }
 if (-not $apiPort) { $apiPort = 3201 }
+
+# The app reaches the API through EXPO_PUBLIC_API_URL. Honour an explicit .env value, otherwise
+# derive it from the detected Wi-Fi address so a device works without hand-editing .env.
+$configuredApiBaseUrl = Get-DotEnvValue -Path $envFile -Name 'EXPO_PUBLIC_API_URL'
+if ($configuredApiBaseUrl -and $configuredApiBaseUrl -notmatch 'YOUR_COMPUTER_LAN_IP') {
+  $apiBaseUrl = $configuredApiBaseUrl.TrimEnd('/')
+  $apiBaseUrlSource = '.env'
+} else {
+  $apiBaseUrl = "http://$wifiIp`:$apiPort"
+  $apiBaseUrlSource = 'detected Wi-Fi address'
+}
+$env:EXPO_PUBLIC_API_URL = $apiBaseUrl
+
 $expoUrl = if ($Tunnel) { 'Expo tunnel mode - use the Expo CLI output QR/link' } else { "exp://$wifiIp`:$expoPort" }
-$apiUrl = "http://$wifiIp`:$apiPort/health"
+$apiUrl = "$apiBaseUrl/health"
 $webUrl = "http://$wifiIp`:$expoPort"
 
 $startedServer = $false
@@ -98,6 +123,7 @@ Write-Host ''
 Write-Host 'RoomMuse startup complete' -ForegroundColor Green
 Write-Host "Repo: $repoRoot"
 Write-Host "Wi-Fi IP: $wifiIp"
+Write-Host "App API base URL: $apiBaseUrl (from $apiBaseUrlSource)"
 if (-not $NoServer) {
   Write-Host "API health URL: $apiUrl"
   Write-Host ("API server: " + $(if ($startedServer) { 'started' } else { 'reused existing listener' }))

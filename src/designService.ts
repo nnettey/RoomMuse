@@ -1,8 +1,6 @@
 import { demoConcept } from "./data";
 import { DesignConcept, DesignStyle } from "./types";
-
-const API_URL = process.env.EXPO_PUBLIC_API_URL ??
-  (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8787` : "");
+import { API_BASE_URL as API_URL } from "./runtimeEnv";
 
 export async function createDesign(photoBase64: string | string[] | undefined, style: DesignStyle): Promise<DesignConcept> {
   const imageBase64s = Array.isArray(photoBase64) ? photoBase64.filter(Boolean).slice(0, 3) : photoBase64 ? [photoBase64] : [];
