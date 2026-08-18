@@ -26,6 +26,19 @@ test("budget entry reaches the shopping plan request and explains an over-budget
   await page.getByLabel("Project budget in dollars").fill("500");
   await expect(page.getByText("Over budget by")).toBeVisible();
   await expect(page.getByText("What is driving the cost")).toBeVisible();
+  // F11: a visible Done ends budget entry, which number-pad alone could not do.
+  await expect(page.getByRole("button",{name:"Done entering budget"})).toBeVisible();
+  // F10: the drivers are actionable, and the headline figures follow immediately.
+  const projected=page.getByText("Projected spend").locator("..").getByText(/^\$[0-9,]+$/);
+  const before=await projected.textContent();
+  await page.getByRole("button",{name:"Increase quantity of Fielding performance linen sofa"}).click();
+  await expect(projected).not.toHaveText(before??"");
+  await page.getByRole("button",{name:"Reduce quantity of Fielding performance linen sofa"}).click();
+  await expect(projected).toHaveText(before??"");
+  await page.getByRole("button",{name:"Remove Fielding performance linen sofa"}).click();
+  await expect(projected).not.toHaveText(before??"");
+  await page.getByRole("button",{name:"Restore Fielding performance linen sofa"}).click();
+  await expect(projected).toHaveText(before??"");
   await page.getByRole("button",{name:"Save budget and continue"}).click();
   await expect(page.getByText("Estimated project total",{exact:false})).toBeVisible({timeout:20000});
   expect((planRequest?.budget as {total?:number}|undefined)?.total).toBe(500);
