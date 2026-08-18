@@ -9,7 +9,7 @@ Rules:
 4. **Never weaken or delete a test** to make your work pass. Record the conflict in §9 instead.
 5. Append to logs; do not rewrite history in this file.
 
-Last updated: 2026-08-17 — by: Lead session — reason: S-1 resolved and implemented; URL gate widened; model migration complete.
+Last updated: 2026-08-18 — by: Remediation session — reason: user-test findings F1–F21; branch `fix/user-test-findings`.
 
 ---
 
@@ -278,3 +278,66 @@ weakening an assertion. Every such change must be justified line by line in this
 
 Not started. WS-6 owns final integration, the full regression sweep, visual re-baselining, the live-data smoke
 test, and the end-to-end acceptance checklist in `PLAN.md` §11.
+
+---
+
+## 12. User-test remediation (2026-08-18, branch `fix/user-test-findings`)
+
+Working through F1–F21 in `HANDOFF.md` §6. Baseline measured on the branch point before any edit:
+typecheck clean, **unit 70/70**, **e2e 15/15**, visual not run (known stale, G2).
+
+### 12.1 The finding that reframed five others
+
+**The user tested in Chrome on iPhone** — the react-native-web build, over plain `http://` on the LAN.
+This was not known when the handoff was written and it is the root cause of three "dead button"
+findings at once:
+
+| Fact | Consequence |
+|---|---|
+| `react-native-web`'s `Alert` is literally `class Alert { static alert() {} }` | All 13 `Alert.alert` call sites were **invisible** on the test device. Also silently disabled "Mark complete" and "Delete project" in the project library |
+| `navigator.share` and `navigator.clipboard` require a **secure context** | `Share.share` rejects and the clipboard fallback fails, so both share buttons did nothing (F4, F5) |
+| `getUserMedia` requires a secure context | The request fails instantly with no prompt, yet expo-camera's web shim still reports `canAskAgain:true`, so `allowCamera` took the "ask again" branch and raised an unrenderable Alert (F3) |
+
+**Consequence for F21:** the HTTPS tunnel is not only a distribution task — it is the real fix for
+F3/F4/F5 on the user's own surface. Sequenced accordingly.
+
+### 12.2 Findings that were not what they looked like
+
+| Finding | Reported | Actual |
+|---|---|---|
+| **F13** | "Shopping plan looks like seed data" | **Confirmed not seed data.** `createProject` always receives `legacy`, server items overwrite every concept (`domain.ts:31-58`), and `tests/domain.test.ts` pins it. Real causes recorded in §12.4 |
+| **F6** | "Remaining does not update on quantity change" | Does not reproduce — `itemTotal` already multiplies by quantity. The real defect: "estimated total" used `domain.total()`, which **includes owned items**, while "remaining" excluded them, so on an owned/purchased item one figure moved and the other did not |
+| **F14** | "~40s Matching real products" | The client stage list is timer-driven and **clamps on that label for the whole wait** (`domain.ts:2-12`). The server genuinely is doing product work though: `/api/design` still calls `resolveShoppingItems` (`server.mjs:864`) even though decision **A2 moved product resolution to `/api/shopping-plan`. Only half of A2 shipped — the removal never did.** That work is discarded and is not even budget-aware |
+
+### 12.3 Defects found while verifying, not in the original list
+
+- **The e2e suite was not hermetic.** On web `API_BASE_URL` resolves to port 3201 and persistence
+  syncs projects to `GET|PUT /api/projects/:id`. With a development server running — the normal
+  state of a working machine — the journeys wrote their fixtures to it and read them back on later
+  runs. `p-seeded` came back with `status:"in-progress"` and a constraint already active, failing two
+  journeys for reasons unrelated to any change. The suite now blocks project sync in `beforeEach`.
+- **An optional sync failure destroyed a local save.** `pushProject` throws on any non-ok response
+  and the exception escaped `saveProject`, so `saveToLibrary` never reached the line recording the
+  library entry. A missing or unreachable server therefore meant **saved projects silently never
+  appeared in "Your saved projects"** — directly relevant to F18 — and, once dialogs became visible,
+  an interrupting modal on every debounced save. Sync now degrades to the local copy.
+  `src/persistence.ts` is not in the unit-test compile set; the refine journey is its regression net
+  and did catch this.
+
+### 12.4 Decisions taken with the user
+
+| ID | Decision | Made by |
+|---|---|---|
+| U1 | **Performance: do both** — cut real latency *and* replace the fake progress with real server-reported stages | User |
+| U2 | **Distribution: tunnel + shared secret.** No public hosting yet. The server has no auth, wide-open CORS and holds the OpenAI key, so the token lands before the tunnel | User, after the security position was put to them explicitly |
+| U3 | **Merge the two budget screens** into one live-editable screen; the save/balanced/invest tiers become a savings-strategy control inside it (resolves G4 with F10) | User |
+| U4 | **Brand accent `#A31621`, distinct from `warn #963C33`, separated by form as well as hue.** Warnings stay filled tinted cards with an icon and an explicit word; the accent only appears as a thin mark on paper, never carrying a message, never on a destructive control | This session; screenshots taken to check rather than assume |
+
+### 12.5 Progress
+
+| Date | Phase | Event |
+|---|---|---|
+| 2026-08-18 | 0 | Branch cut. Baseline measured: typecheck clean, unit 70/70, e2e 15/15 |
+| 2026-08-18 | 1 | **F3, F4, F5 fixed.** New `src/Dialog.tsx` — one cross-platform dialog host replacing every `Alert.alert`. Share gained a third, always-available level (share sheet → clipboard → selectable text) and no longer treats a cancelled sheet as failure. Camera checks for a secure context before requesting, reports every failure, answers the user's question in copy (the permission is a one-time device grant and is optional), and no longer strands the user on "Preparing camera...". The constraint-release journey was passing vacuously — it waited on `page.once("dialog")` for a platform dialog that never fired — and now asserts both halves of the guarantee. Gates: unit 70/70, e2e 15/15 |
+| 2026-08-18 | 2 | **F6, F12 fixed.** `budget.ts` gains `planTotals(items, filter)`; the estimated total is now projected spend so both headline figures share one predicate set. `budgetSummary` takes the same filter. `ShoppingScreen`, the share summary and `ProjectHub` all read it. Two never-rendered components carrying a third copy of the money maths were removed from `RoomMuseApp`. Also fixed the two defects in §12.3. Gates: unit 76/76, **e2e 16/16** |
+| 2026-08-18 | 3 | **F1, F2 done.** Renamed to "Tracy's Room Muse" in user interfaces only — storage keys, slug, scheme, bundle id, package name, analytics prefix and route names verified unchanged. The palette moved into `src/theme.ts` and the five duplicated `const C` declarations plus `ResilientImage`'s inlined hexes now import it. Accent placed on five "this is your choice" surfaces. Gates: unit 76/76, e2e 16/16. **Visual baselines are now knowingly stale** — regenerated in their own commit at the end (G2) |
