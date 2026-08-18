@@ -392,7 +392,7 @@ function inputImageInfo(buffer) {
 //     views influenced the result only weakly.
 // So all three photos now contribute to the image, not just the analysis (REQ-4).
 async function renderRoom(scans, style, conceptName = "Signature", instructions = "") {
-  if (!apiKey) throw new Error("AI rendering is not configured yet. Add OPENAI_API_KEY to the local .env file and restart the RoomMuse studio.");
+  if (!apiKey) throw new Error("AI rendering is not configured yet. Add OPENAI_API_KEY to the local .env file and restart Tracy’s Room Muse.");
   const views = (Array.isArray(scans) ? scans : [scans]).filter(Boolean);
   if (!views.length) throw new Error("At least one room image is required to render a design.");
   const direction = conceptName === "Refined"
@@ -737,7 +737,7 @@ function handleIdentifyProductRequest(req, res) {
     try {
       const { imageBase64, style = "Modern", action = "replace", userNotes = "", userPrice, roomAnalysis, targetItem } = JSON.parse(raw);
       if (!imageBase64) return send(res, 400, { error: "A photo of the product is required." });
-      if (!apiKey) return send(res, 503, { error: "Product identification is not configured. Add OPENAI_API_KEY to the local .env file and restart the RoomMuse studio." });
+      if (!apiKey) return send(res, 503, { error: "Product identification is not configured. Add OPENAI_API_KEY to the local .env file and restart Tracy’s Room Muse." });
       const buffer = Buffer.from(imageBase64, "base64");
       const info = inputImageInfo(buffer);
       const schema = {

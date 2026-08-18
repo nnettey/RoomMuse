@@ -11,7 +11,7 @@ import { priceMovement, projectStatus, selected } from "./domain";
 import type { ProjectSummary } from "./projectStore";
 import type { Budget, Item, Project } from "./enhancedTypes";
 
-const C = { ink: "#17211B", green: "#244C3B", paper: "#FCFBF7", line: "#DEDCD3", clay: "#B87958", muted: "#68706A", white: "#FFF", warn: "#963C33", good: "#2F6B4F" };
+import{C}from"./theme";
 const money = (n: number) => "$" + Math.round(n).toLocaleString();
 const signed = (n: number) => (n >= 0 ? "+" : "−") + money(Math.abs(n));
 
@@ -55,7 +55,7 @@ export function BudgetSetupScreen({ project, onBack, onSave, onContinue }: { pro
       <Top title="Project budget" back={onBack} />
       <ScrollView contentContainerStyle={s.content}>
         <Text style={s.h1}>What would you like to spend?</Text>
-        <Text style={s.body}>RoomMuse works within this figure when it looks for products, rather than totalling things up afterwards.</Text>
+        <Text style={s.body}>Tracy’s Room Muse works within this figure when it looks for products, rather than totalling things up afterwards.</Text>
         <TextInput accessibilityLabel="Project budget in dollars" value={draft} onChangeText={setDraft} keyboardType="number-pad" placeholder="e.g. 6000" placeholderTextColor="#9AA29C" style={s.amount} />
 
         {items.length > 0 && (
@@ -196,7 +196,7 @@ export function PriceRefreshScreen({ project, busy, error, lastRefreshedAt, fail
         ) : (
           <>
             <Text style={s.h1}>Check for changes</Text>
-            <Text style={s.body}>RoomMuse re-checks each product on the same retailer page it linked to. Prices that cannot be confirmed are reported rather than guessed.</Text>
+            <Text style={s.body}>Tracy’s Room Muse re-checks each product on the same retailer page it linked to. Prices that cannot be confirmed are reported rather than guessed.</Text>
             {lastRefreshedAt && <Text style={s.note}>Last checked {new Date(lastRefreshedAt).toLocaleString()}</Text>}
             <Btn label={busy ? "Checking prices…" : "Check prices now"} disabled={busy} onPress={onRefresh} />
             {busy && <ActivityIndicator color={C.green} style={{ marginVertical: 12 }} />}

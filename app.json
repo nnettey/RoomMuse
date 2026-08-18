@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "RoomMuse",
+    "name": "Tracy’s Room Muse",
     "slug": "roommuse",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,17 +10,17 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.roommuse.app",
       "infoPlist": {
-        "NSCameraUsageDescription": "RoomMuse uses your camera to capture the room you want to redesign.",
-        "NSMicrophoneUsageDescription": "RoomMuse uses your microphone to include sound when you record a room video.",
-        "NSPhotoLibraryUsageDescription": "RoomMuse lets you choose room photos for a design concept."
+        "NSCameraUsageDescription": "Tracy’s Room Muse uses your camera to capture the room you want to redesign.",
+        "NSMicrophoneUsageDescription": "Tracy’s Room Muse uses your microphone to include sound when you record a room video.",
+        "NSPhotoLibraryUsageDescription": "Tracy’s Room Muse lets you choose room photos for a design concept."
       }
     },
     "plugins": [
       ["expo-camera", {
-        "cameraPermission": "Allow RoomMuse to scan and photograph your room.",
-        "microphonePermission": "Allow RoomMuse to record sound with a room video."
+        "cameraPermission": "Allow Tracy’s Room Muse to scan and photograph your room.",
+        "microphonePermission": "Allow Tracy’s Room Muse to record sound with a room video."
       }],
-      ["expo-image-picker", { "photosPermission": "Allow RoomMuse to select a room photo." }]
+      ["expo-image-picker", { "photosPermission": "Allow Tracy’s Room Muse to select a room photo." }]
     ]
   }
 }
