@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { styles, concepts } from "../src/enhancedData";
-import { addFieldItem, applyBudget, appendObservation, applyPriceRefresh, canRefreshPrices, compareConcepts, compareProducts, completeProject, createProject, isFavorited, mergePriceHistory, priceMovement, projectStatus, reopenProject, replace, revertSubstitution, selected, substituteItem, toggleFavorite, total, updateItem } from "../src/domain";
+import { addFieldItem, applyBudget, appendObservation, applyDeal, applyPriceRefresh, canRefreshPrices, compareConcepts, compareProducts, completeProject, createProject, isFavorited, mergePriceHistory, priceMovement, projectStatus, reopenProject, replace, revertSubstitution, selected, substituteItem, toggleFavorite, total, updateItem } from "../src/domain";
 import { budgetSummary, closesGap, costDrivers, planTotals, projectedSpend, suggestSubstitutions } from "../src/budget";
 import { addConstraint, canModifyItem, constraintsFromDecisions, createConstraint, applyConstraintsToConcept, constraintPrompts, releaseConstraint } from "../src/constraints";
 import type { Alternative, Item, PriceObservation, Project } from "../src/enhancedTypes";
@@ -271,4 +271,60 @@ test("removed items are absent from every figure", () => {
   assert.equal(totals.estimatedTotal, 1000);
   assert.equal(totals.remainingToPurchase, 1000);
   assert.equal(totals.itemCount, 1);
+});
+
+// ---------------------------------------------------------------------------------------------
+// F17 — "Check shopping deals" was display-only: it stored project.deals and never touched a price,
+// so a better verified price never reached the shopping list or the remaining-to-purchase figure.
+const dealAlternative = (price: number): Alternative => ({
+  id: "alt-deal", name: "Haven compact linen sofa", retailer: "Wayfair",
+  purchaseUrl: "https://www.wayfair.com/furniture/pdp/haven-sofa-w001.html",
+  unitPrice: price, dimensions: "80 in W", finish: "Linen", difference: "Balanced tier verified product",
+  available: true, availability: "In stock", priceStatus: "verified", lastPriceCheckedAt: at(5),
+  budgetTier: "balanced", provenance: "verified"
+} as Alternative);
+
+function projectWithDeal(price = 899) {
+  const base = createProject(style, []);
+  const item = { ...verified("sofa", "Fielding sofa", 1299), alternatives: [dealAlternative(price)] } as Item;
+  return replace(base, { ...selected(base)!, shoppingItems: [item] });
+}
+
+test("taking a deal moves the price, the plan total and the remaining figure", () => {
+  const project = projectWithDeal();
+  const conceptId = selected(project)!.id;
+  assert.equal(planTotals(selected(project)!.shoppingItems).remainingToPurchase, 1299);
+  const next = applyDeal(project, conceptId, "sofa", dealAlternative(899));
+  const item = selected(next)!.shoppingItems[0]!;
+  assert.equal(item.unitPrice, 899);
+  assert.equal(item.name, "Haven compact linen sofa");
+  assert.equal(planTotals(selected(next)!.shoppingItems).estimatedTotal, 899);
+  assert.equal(planTotals(selected(next)!.shoppingItems).remainingToPurchase, 899);
+});
+
+test("taking a deal records the price change rather than overwriting it", () => {
+  const project = projectWithDeal();
+  const next = applyDeal(project, selected(project)!.id, "sofa", dealAlternative(899));
+  const history = selected(next)!.shoppingItems[0]!.priceHistory ?? [];
+  // Append-only: the price it was, and the price it became, each identified by its own url.
+  assert.equal(history.length, 2);
+  assert.deepEqual(history.map(o => o.price).sort((a, b) => a - b), [899, 1299]);
+  const applied = history.find(o => o.price === 899)!;
+  assert.equal(applied.source, "verified");
+  assert.equal(applied.url, "https://www.wayfair.com/furniture/pdp/haven-sofa-w001.html");
+});
+
+test("a deal is refused for a piece already purchased or owned, and for a completed project", () => {
+  const purchased = (() => { const p = projectWithDeal(); const c = selected(p)!; return replace(p, { ...c, shoppingItems: [{ ...c.shoppingItems[0]!, isPurchased: true }] }); })();
+  assert.equal(selected(applyDeal(purchased, selected(purchased)!.id, "sofa", dealAlternative(899)))!.shoppingItems[0]!.unitPrice, 1299);
+  const owned = (() => { const p = projectWithDeal(); const c = selected(p)!; return replace(p, { ...c, shoppingItems: [{ ...c.shoppingItems[0]!, isOwned: true }] }); })();
+  assert.equal(selected(applyDeal(owned, selected(owned)!.id, "sofa", dealAlternative(899)))!.shoppingItems[0]!.unitPrice, 1299);
+  const done = completeProject(projectWithDeal());
+  assert.equal(selected(applyDeal(done, selected(done)!.id, "sofa", dealAlternative(899)))!.shoppingItems[0]!.unitPrice, 1299);
+});
+
+test("a deal that is not actually cheaper is refused", () => {
+  const project = projectWithDeal(1400);
+  const next = applyDeal(project, selected(project)!.id, "sofa", dealAlternative(1400));
+  assert.equal(selected(next)!.shoppingItems[0]!.unitPrice, 1299);
 });

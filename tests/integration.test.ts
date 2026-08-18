@@ -22,7 +22,12 @@ test("verified live product URLs are accepted",()=>{for(const url of[
   "https://www.walmart.com/ip/10981207219",
   "https://www.rugsusa.com/products/seed-ivory-natural-handwoven-jute-rug?variant=50093398655270",
   "https://www.lampsplus.com/p/dainolite-finley-60-inch-high-matte-black-modern-floor-lamp__6622h",
-  "https://www.lampsplus.com/products/regency-hill-65-and-one-half-inch-leisa-sand-finish-modern-floor-lamp__273a9.html"
+  "https://www.lampsplus.com/products/regency-hill-65-and-one-half-inch-leisa-sand-finish-modern-floor-lamp__273a9.html",
+  // G6 additions, each taken from a real product page rather than assumed.
+  "https://www.cb2.com/camden-101-white-performance-fabric-sofa/s104962",
+  "https://www.cb2.com/faible-100-white-performance-deep-depth-fabric-sofa/s355885",
+  "https://www.allmodern.com/furniture/pdp/allmodern-lisette-87-upholstered-sofa-a110020027.html",
+  "https://www.allmodern.com/furniture/pdp/allmodern-component-ottoman-goms1032.html"
 ])assert.equal(isDirectProductUrl(url),true,"should accept "+url)});
 // Widening a pattern must not let a category or search page through — that is the failure the
 // gate exists to prevent, so the negative cases are pinned alongside the positive ones.
@@ -32,7 +37,14 @@ test("widened patterns still reject non-product pages",()=>{for(const url of[
   "https://www.lampsplus.com/p/",
   "https://www.homedepot.com/b/Lighting-Lamps/N-5yc1vZc7oj",
   "https://www.target.com/c/furniture/-/N-5xtvd",
-  "https://www.rugsusa.com/collections/jute-rugs"
+  "https://www.rugsusa.com/collections/jute-rugs",
+  // A widened domain must not become a hole: these are the category and brand pages that live
+  // alongside the product pages above.
+  "https://www.cb2.com/furniture/sofas/1",
+  "https://www.cb2.com/apartment-sofas",
+  "https://www.cb2.com/furniture/living-room-furniture/",
+  "https://www.allmodern.com/brand/bnd/allmodern-b56298.html",
+  "https://www.allmodern.com/design-services"
 ])assert.equal(isDirectProductUrl(url),false,"should reject "+url)});
 // The pattern table is duplicated between the Node server and the app, which cannot share a
 // module. Drift would mean the server accepts a link the app then refuses to open, or worse.

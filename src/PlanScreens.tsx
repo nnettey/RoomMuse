@@ -204,7 +204,9 @@ export function BudgetSetupScreen({ project, onBack, onSave, onContinue, continu
 
         <Btn label={budget ? (continueLabel ?? "Save budget and continue") : "Enter a budget to continue"} disabled={!budget} onPress={apply} />
         {onRebuild && <Btn label="Rebuild the plan for this budget" quiet disabled={!budget} onPress={() => { if (budget) { const next = { ...project, budget, updatedAt: new Date().toISOString() }; onSave(next); onRebuild(next); } }} />}
-        {!onRebuild && <Btn label="Skip for now" quiet onPress={() => onContinue(project)} />}
+        {/* F13: skipping used to build the plan with no budget silently, so the plan the user then
+            judged had never been shaped by a figure at all. Say what skipping costs. */}
+        {!onRebuild && <Btn label="Skip for now" quiet onPress={() => { void confirmAction("Build the plan without a budget?", "Products will be chosen for the design alone, so the plan may come back well above or below what you had in mind. You can set a budget later and rebuild.", "Skip anyway", "default", "Set a budget").then(ok => { if (ok) onContinue(project); }); }} />}
       </ScrollView>
     </SafeAreaView>
   );

@@ -91,7 +91,9 @@ function isDirectProductUrl(value) {
       ["potterybarn.com", /^\/products\//],
       ["crateandbarrel.com", /\/[sf]\d+$/],
       ["lampsplus.com", /^\/(p|products)\//],
-      ["rugsusa.com", /^\/products\//]
+      ["rugsusa.com", /^\/products\//],
+      ["cb2.com", /\/[sf]\d+$/],
+      ["allmodern.com", /\/pdp\//]
     ];
     const retailer = retailerPatterns.find(([domain]) => hostname === domain || hostname.endsWith(`.${domain}`));
     return retailer ? retailer[1].test(path) : true;
@@ -131,7 +133,7 @@ function responseText(payload) {
 const retailerDomains = [
   "wayfair.com", "homedepot.com", "lowes.com", "target.com", "walmart.com",
   "ikea.com", "westelm.com", "potterybarn.com", "crateandbarrel.com",
-  "lampsplus.com", "rugsusa.com"
+  "lampsplus.com", "rugsusa.com", "cb2.com", "allmodern.com"
 ];
 function sourceUrlKey(value) {
   try {
@@ -224,7 +226,7 @@ async function resolveProductBatch(entries, style, context = {}) {
       body: JSON.stringify({
         model: productSearchModel,
         tools: [{ type: "web_search", search_context_size: "medium", user_location: { type: "approximate", country: "US" } }],
-        input: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. ${guidance} Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.`
+        input: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw, unitCeiling }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish, ...(unitCeiling ? { maxUnitPriceUsd: unitCeiling } : {}) })))}. Where a request states maxUnitPriceUsd, prefer products at or below it; report a higher-priced product only when nothing suitable exists below it, and never adjust or estimate a price to fit. Use only these retailers: ${retailerDomains.join(", ")}. ${guidance} Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.`
       })
     });
     if (!searchResponse.ok) throw new Error(`product search returned ${searchResponse.status}: ${(await searchResponse.text()).slice(0, 180)}`);
@@ -271,15 +273,28 @@ async function resolveProductBatch(entries, style, context = {}) {
 async function resolveShoppingItems(analysis, style, conceptId, context = {}) {
   const checkedAt = new Date().toISOString();
   const source = sourceShoppingItems(analysis);
+  // A per-piece share of the budget, allocated in proportion to the brief's own expected cost.
+  // This is an allocation rule over the model's estimates, not an invented price: it never appears
+  // in the plan, it only decides which of the verified products found is the right one to take.
+  const quantityOf = raw => Math.max(1, Math.min(12, Math.round(Number(raw.quantity) || 1)));
+  const expected = source.map(raw => Math.max(10, Math.round(Number(raw.estimatedUnitPrice) || 100)) * quantityOf(raw));
+  const expectedTotal = expected.reduce((sum, value) => sum + value, 0);
+  const budgetTotal = Number(context.budget?.total) > 0 ? Number(context.budget.total) : undefined;
+  const unitCeiling = index => {
+    if (!budgetTotal || !expectedTotal) return undefined;
+    const raw = source[index];
+    if (!raw) return undefined;
+    return Math.round((budgetTotal * (expected[index] / expectedTotal)) / quantityOf(raw));
+  };
   const batches = [];
   for (let index = 0; index < source.length; index += 2) {
-    batches.push(source.slice(index, index + 2).map((raw, offset) => ({ requestIndex: index + offset, raw })));
+    batches.push(source.slice(index, index + 2).map((raw, offset) => ({ requestIndex: index + offset, raw, unitCeiling: unitCeiling(index + offset) })));
   }
   const resolvedBatches = await Promise.all(batches.map(batch => resolveProductBatch(batch, style, context)));
   const choicesByIndex = new Map();
   for (const batch of resolvedBatches) for (const [index, choices] of batch) choicesByIndex.set(index, choices);
   const unmatched = source
-    .map((raw, requestIndex) => ({ requestIndex, raw }))
+    .map((raw, requestIndex) => ({ requestIndex, raw, unitCeiling: unitCeiling(requestIndex) }))
     .filter(entry => !(choicesByIndex.get(entry.requestIndex)?.length));
   const fallbackBatches = await Promise.all(unmatched.map(entry => resolveProductBatch([entry], style, context)));
   for (const batch of fallbackBatches) {
@@ -290,7 +305,15 @@ async function resolveShoppingItems(analysis, style, conceptId, context = {}) {
     const requestedName = String(raw.name ?? `${style} room piece`).slice(0, 100);
     const estimatedPrice = Math.max(10, Math.round(Number(raw.estimatedUnitPrice) || 100));
     const choices = choicesByIndex.get(index) ?? [];
-    const primary = choices.find(product => product.tier === "balanced") ?? choices.find(product => product.tier === "invest") ?? choices[0];
+    const ceiling = unitCeiling(index);
+    const affordable = ceiling ? choices.filter(product => Number(product.currentPrice) <= ceiling) : [];
+    const primary = !ceiling
+      ? (choices.find(product => product.tier === "balanced") ?? choices.find(product => product.tier === "invest") ?? choices[0])
+      : affordable.length
+        // The best piece that fits the share, not the cheapest — the budget is a ceiling, not a target.
+        ? affordable.slice().sort((a, b) => Number(b.currentPrice) - Number(a.currentPrice))[0]
+        // Nothing fits: keep the cheapest real product rather than dropping the piece or inventing one.
+        : choices.slice().sort((a, b) => Number(a.currentPrice) - Number(b.currentPrice))[0];
     const verified = Boolean(primary);
     const base = {
       name: primary?.productName ?? requestedName,
