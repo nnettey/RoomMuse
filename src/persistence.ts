@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import {normalizeProject,resolveProjectConflict} from "./domain";
 import {Project} from "./enhancedTypes";
 import {DesignConcept} from "./types";
-import{API_BASE_URL as API_URL}from"./runtimeEnv";
+import{API_BASE_URL as API_URL,apiHeaders}from"./runtimeEnv";
 
 // Storage keys, newest first. Older keys stay READABLE and are never deleted: that is what keeps
 // a rollback to a previous build non-destructive, and it is a guarantee docs/CURRENT_CONTRACTS.md
@@ -15,7 +15,7 @@ async function request(path:string,init?:RequestInit){
   if(!API_URL)return undefined;
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),5000);
-  try{return await fetch(API_URL+path,{...init,signal:controller.signal})}finally{clearTimeout(timer)}
+  try{return await fetch(API_URL+path,{...init,headers:apiHeaders(init?.headers as Record<string,string>|undefined),signal:controller.signal})}finally{clearTimeout(timer)}
 }
 async function remoteProject(id:string){
   const response=await request("/api/projects/"+encodeURIComponent(id));

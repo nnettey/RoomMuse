@@ -22,6 +22,19 @@ function detectedApiBaseUrl(): string {
 /** Base URL of the RoomMuse API, or "" when it cannot be determined. Never throws. */
 export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? detectedApiBaseUrl()).replace(/\/+$/, "");
 
+/**
+ * The shared secret this build presents to the studio (F21).
+ *
+ * Baked in at build time like the API URL. It is not a user credential and grants nothing but access
+ * to the studio that issued it — its job is to stop a tunnelled URL becoming an open, unauthenticated
+ * proxy to someone's OpenAI key. Empty when the studio is running open on a LAN.
+ */
+export const API_TOKEN = (process.env.EXPO_PUBLIC_API_TOKEN ?? "").trim();
+
+/** Headers every studio request carries. Merge into fetch init rather than hand-rolling per call. */
+export const apiHeaders = (extra: Record<string, string> = {}): Record<string, string> =>
+  API_TOKEN ? { ...extra, Authorization: "Bearer " + API_TOKEN } : { ...extra };
+
 /** The `?demo=` route on web, or null anywhere `window.location` is unavailable. Never throws. */
 export function demoRoute(): string | null {
   const search = browserLocation()?.search;

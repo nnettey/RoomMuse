@@ -1,7 +1,7 @@
 import http from "node:http";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 if (existsSync(".env")) {
   for (const line of readFileSync(".env", "utf8").split(/\r?\n/)) {
@@ -15,6 +15,13 @@ function expandWindowsEnv(value) {
 }
 
 const port = Number(process.env.PORT ?? 3201);
+// A shared secret every client must present. Absent, the server stays open and says so at startup —
+// that keeps the existing LAN workflow working unchanged, and makes the exposed case a deliberate
+// choice rather than an accident.
+const apiToken = (process.env.ROOMMUSE_API_TOKEN ?? "").trim();
+// Comma-separated origins for CORS. Absent, "*" as before.
+const allowedOrigins = (process.env.ROOMMUSE_ALLOWED_ORIGINS ?? "")
+  .split(",").map(value => value.trim()).filter(Boolean);
 const apiKey = process.env.OPENAI_API_KEY;
 
 // Model roles.
@@ -700,9 +707,54 @@ function sendJobState(req, res) {
   return send(res, 200, { ...state, elapsedMs: Date.now() - job.startedAt, result });
 }
 
-function send(res, status, body) {
-  res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS" });
+// Behind a tunnel or a proxy the request arrives over http on the loopback but the client reached
+// us over https. Trust the forwarded scheme so generated image URLs are not mixed content.
+function publicBaseUrl(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] ?? "").split(",")[0].trim();
+  const host = forwardedHost || req.headers.host;
+  const protocol = forwardedProto || (process.env.ROOMMUSE_PUBLIC_SCHEME ?? "http");
+  return protocol + "://" + host;
+}
+function corsHeaders(req) {
+  const origin = req?.headers?.origin;
+  const allow = !allowedOrigins.length ? "*" : (origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0]);
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS",
+    ...(allowedOrigins.length ? { Vary: "Origin" } : {})
+  };
+}
+function send(res, status, body, req) {
+  res.writeHead(status, { "Content-Type": "application/json", ...corsHeaders(req) });
   res.end(JSON.stringify(body));
+}
+// Constant-time compare so a token cannot be recovered by timing. Never logged, anywhere.
+function tokenMatches(presented) {
+  if (!presented) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(apiToken);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+function authorized(req) {
+  if (!apiToken) return true;
+  const header = req.headers.authorization ?? "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  return tokenMatches(bearer || String(req.headers["x-roommuse-token"] ?? "").trim());
+}
+// A small per-IP budget on the routes that spend money. Enough headroom for a tester working
+// normally, low enough that a leaked URL cannot run up a bill unattended.
+const spendWindowMs = 60 * 60 * 1000;
+const spendLimit = Number(process.env.ROOMMUSE_HOURLY_LIMIT ?? 40);
+const spendLog = new Map();
+function withinRateLimit(req) {
+  const key = String(req.socket?.remoteAddress ?? "unknown");
+  const now = Date.now();
+  const hits = (spendLog.get(key) ?? []).filter(at => now - at < spendWindowMs);
+  hits.push(now);
+  spendLog.set(key, hits);
+  return hits.length <= spendLimit;
 }
 
 function projectPath(url) {
@@ -925,7 +977,7 @@ function handleRefineRequest(req, res) {
       log(`[refine ${id}] ${style} ${conceptName} started`);
       const rendered = await renderRoom([{ buffer: input, mime: info.mime }], style, conceptName, instructions);
       writeFileSync(join(storageDir, fileName), rendered);
-      const baseUrl = "http://" + req.headers.host;
+      const baseUrl = publicBaseUrl(req);
       log(`[refine ${id}] completed in ${Math.round((Date.now() - started) / 1000)}s`);
       send(res, 200, { imageDataUrl: baseUrl + "/designs/" + fileName, generatedAt: new Date().toISOString(), revisionSummary: String(instructions).trim().slice(0, 1000) });
     } catch (error) {
@@ -934,9 +986,13 @@ function handleRefineRequest(req, res) {
     }
   });
 }
+const aiRoutes = ["/api/design", "/api/shopping-plan", "/api/refine", "/api/prices/refresh", "/api/identify-product"];
 const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") return send(res, 204, {});
-  if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, ai: Boolean(apiKey) });
+  if (req.method === "OPTIONS") return send(res, 204, {}, req);
+  // /health stays open so a tester can confirm the studio is reachable before anything else.
+  if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, ai: Boolean(apiKey), auth: Boolean(apiToken) }, req);
+  if (req.url?.startsWith("/api/") && !authorized(req)) return send(res, 401, { error: "This studio requires an access token." }, req);
+  if (aiRoutes.includes(req.url ?? "") && !withinRateLimit(req)) return send(res, 429, { error: "Too many design requests from this device in the last hour. Try again later." }, req);
   if (req.method === "GET" && req.url?.startsWith("/api/jobs/")) return sendJobState(req, res);
   if (req.method === "GET" && req.url?.startsWith("/designs/")) return serveDesignImage(req, res);
   if ((req.method === "GET" || req.method === "PUT") && req.url?.startsWith("/api/projects/")) return handleProjectRequest(req, res);
@@ -982,7 +1038,7 @@ const server = http.createServer(async (req, res) => {
       const primary = renderResults[0];
       if (!primary || primary.status === "rejected") throw primary?.reason ?? new Error("The primary design render failed.");
       writeFileSync(join(storageDir, afterName), primary.value);
-      const baseUrl = "http://" + req.headers.host;
+      const baseUrl = publicBaseUrl(req);
       const signatureUrl = baseUrl + "/designs/" + afterName;
       const variants = conceptNames.slice(1).map((conceptName, index) => {
         const result = renderResults[index + 1];
@@ -1007,4 +1063,10 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(port, "0.0.0.0", () => log(`RoomMuse studio listening on http://0.0.0.0:${port} (${apiKey ? "AI enabled" : "demo mode"})`));
+server.listen(port, "0.0.0.0", () => {
+  log(`RoomMuse studio listening on http://0.0.0.0:${port} (${apiKey ? "AI enabled" : "demo mode"})`);
+  // Stated plainly at startup: an open studio on a LAN is fine, an open studio on a tunnel is not.
+  log(apiToken
+    ? "Access token required on every /api route."
+    : "NO ACCESS TOKEN SET - every /api route is open to anyone who can reach this port. Set ROOMMUSE_API_TOKEN before exposing it beyond your own network.");
+});

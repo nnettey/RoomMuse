@@ -37,6 +37,53 @@ This first build uses Expo Go so it can be tested from Windows without Xcode or 
 
 Camera capture and the interface can be explored without an API key, but demo projects use clearly non-personalized sample data. A room-grounded design and shopping list require the local AI server configured below.
 
+## Let someone else test it from their phone
+
+Testers do not need to be on your Wi-Fi, but they do need the studio to be reachable — and the
+studio holds your OpenAI key, so it must be locked before it is exposed. The script refuses to
+tunnel without a token for exactly that reason.
+
+1. **Set a token.** Add one long random value to `.env`:
+
+   ```
+   ROOMMUSE_API_TOKEN=<a long random string>
+   ```
+
+   It is a door key for the studio, not a user password. It is baked into the build the tester
+   loads, sent as `Authorization: Bearer`, compared in constant time, and never logged.
+
+2. **Expose the API over HTTPS.** In a second terminal:
+
+   ```
+   cloudflared tunnel --url http://localhost:3201
+   ```
+
+   HTTPS is not optional. Browsers only allow the camera, the share sheet and the clipboard in a
+   secure context, which is why those appear broken when the app is opened over `http://` on a LAN
+   address.
+
+3. **Start everything, pointing the app at the tunnel:**
+
+   ```
+   powershell -ExecutionPolicy Bypass -File scripts\start-roommuse.ps1 -Tunnel -ApiPublicUrl https://<name>.trycloudflare.com
+   ```
+
+   Send the tester the Expo link the script prints. Your machine has to stay awake and online for
+   the whole session: the tunnel and the studio both run on it.
+
+**What the token does and does not do.** Every `/api` route requires it; `/health` stays open so a
+tester can check the studio is up. The AI routes are additionally capped per device per hour
+(`ROOMMUSE_HOURLY_LIMIT`, 40 by default), so a leaked link cannot run up a bill unattended. Restrict
+browser origins with `ROOMMUSE_ALLOWED_ORIGINS` if you need to.
+
+**Rotating or revoking access:** change `ROOMMUSE_API_TOKEN`, restart the server, and rebuild. Every
+existing tester build stops working immediately.
+
+**What this is not.** It is a good way to put the app in a few hands today, not a way to ship it. A
+real distribution needs the API hosted rather than tunnelled from your desk, and a TestFlight or EAS
+build rather than Expo Go. The prerequisites for that are not in place yet: there is no `eas.json`,
+and `app.json` has no `owner`, no `extra.eas.projectId` and no `android` block.
+
 ## Enable AI room rendering
 
 The phone never receives the OpenAI API key. A tiny local server performs the image edit.
