@@ -67,15 +67,27 @@ export async function loadProject(){
   }catch{return local}
 }
 
+/** The most recent optional-sync failure, if any. Nothing depends on it; it exists so a screen can
+ *  report the state honestly without a failed sync blocking a save. */
+let lastSyncError:string|undefined;
+export const projectSyncError=()=>lastSyncError;
+
 export async function saveProject(project:Project){
   const stored=await AsyncStorage.getItem(KEY);
   let next=stored?resolveProjectConflict(project,normalizeProject(JSON.parse(stored) as Project)):project;
   await AsyncStorage.setItem(KEY,JSON.stringify(next));
   if(API_URL){
-    const remote=await remoteProject(next.projectId);
-    if(remote)next=resolveProjectConflict(next,remote);
-    next=await pushProject(next);
-    await AsyncStorage.setItem(KEY,JSON.stringify(next));
+    try{
+      const remote=await remoteProject(next.projectId);
+      if(remote)next=resolveProjectConflict(next,remote);
+      next=await pushProject(next);
+      await AsyncStorage.setItem(KEY,JSON.stringify(next));
+      lastSyncError=undefined;
+    }catch(error){
+      // Recorded rather than thrown: the project is already saved on this device, and an optional
+      // sync is not worth interrupting the user or losing the library entry over.
+      lastSyncError=error instanceof Error?error.message:"Project synchronization is unavailable.";
+    }
   }
   return next;
 }

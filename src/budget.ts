@@ -9,7 +9,7 @@
 //   remainingToPurchase projectedSpend minus what is already bought
 //   variance            budget.total − projectedSpend. POSITIVE is under budget, negative is over.
 import { isDirectProductUrl } from "./productLinks";
-import type { Budget, BudgetCategoryLine, BudgetSummary, CostDriver, Item } from "./enhancedTypes";
+import type { Budget, BudgetCategoryLine, BudgetSummary, CostDriver, Filter, Item } from "./enhancedTypes";
 
 const lineTotal = (item: Item) => item.unitPrice * Math.max(0, item.quantity);
 const inPlan = (item: Item) => !item.isRemoved;
@@ -19,6 +19,51 @@ export const planTotal = (items: Item[]) => items.filter(inPlan).reduce((sum, it
 export const projectedSpend = (items: Item[]) => items.filter(isSpend).reduce((sum, item) => sum + lineTotal(item), 0);
 export const remainingToPurchase = (items: Item[]) =>
   items.filter(item => isSpend(item) && !item.isPurchased && !item.checked).reduce((sum, item) => sum + lineTotal(item), 0);
+/** Money already spent on this plan: bought pieces the user is not buying again. */
+export const alreadyPurchased = (items: Item[]) =>
+  items.filter(item => isSpend(item) && (item.isPurchased || item.checked)).reduce((sum, item) => sum + lineTotal(item), 0);
+/** What the user already owns and is keeping. Counted in the plan, never in what they will spend. */
+export const alreadyOwned = (items: Item[]) =>
+  items.filter(item => inPlan(item) && item.isOwned).reduce((sum, item) => sum + lineTotal(item), 0);
+
+/** The priority filter the shopping plan applies to its list. Kept next to arrange() in domain.ts. */
+const matchesFilter = (item: Item, filter: Filter) => filter === "All" || item.priority === filter;
+export const applyFilter = (items: Item[], filter: Filter = "All") => items.filter(item => matchesFilter(item, filter));
+
+export type PlanTotals = {
+  estimatedTotal: number;
+  remainingToPurchase: number;
+  alreadyPurchased: number;
+  alreadyOwned: number;
+  itemCount: number;
+  filter: Filter;
+};
+
+/**
+ * The one place a screen gets the two headline figures.
+ *
+ * Both are derived from the SAME predicate set, which is the fix for F6: the shopping plan used to
+ * take its "estimated project total" from domain.total(), which counts pieces the user already
+ * owns, while "remaining to purchase" excluded them. Changing the quantity of an owned or
+ * already-bought item therefore moved the top number and not the bottom one. Here the estimated
+ * total is projected spend — money that will actually leave the user's pocket — so the two figures
+ * can never disagree again.
+ *
+ * The filter argument is F12: when the user narrows the plan to a priority band, the totals must
+ * describe the band they are looking at, otherwise the figures cannot inform the decision the
+ * filter exists to support.
+ */
+export function planTotals(items: Item[], filter: Filter = "All"): PlanTotals {
+  const scoped = applyFilter(items, filter);
+  return {
+    estimatedTotal: projectedSpend(scoped),
+    remainingToPurchase: remainingToPurchase(scoped),
+    alreadyPurchased: alreadyPurchased(scoped),
+    alreadyOwned: alreadyOwned(scoped),
+    itemCount: scoped.filter(inPlan).length,
+    filter
+  };
+}
 
 /** An alternative is only usable as a substitution if it is a verified product on a real product page. */
 const usableAlternative = (item: Item) =>
@@ -67,17 +112,18 @@ export function costDrivers(items: Item[], limit = 5): CostDriver[] {
     });
 }
 
-export function budgetSummary(items: Item[], budget?: Budget): BudgetSummary {
-  const spend = projectedSpend(items);
+export function budgetSummary(items: Item[], budget?: Budget, filter: Filter = "All"): BudgetSummary {
+  const scoped = applyFilter(items, filter);
+  const spend = projectedSpend(scoped);
   const total = Number(budget?.total) > 0 ? Number(budget!.total) : undefined;
   return {
     budget,
     projectedSpend: spend,
-    remainingToPurchase: remainingToPurchase(items),
+    remainingToPurchase: remainingToPurchase(scoped),
     variance: total === undefined ? 0 : total - spend,
     overBudget: total !== undefined && spend > total,
-    byCategory: byCategory(items),
-    costDrivers: costDrivers(items)
+    byCategory: byCategory(scoped),
+    costDrivers: costDrivers(scoped)
   };
 }
 
