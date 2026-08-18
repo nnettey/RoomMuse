@@ -95,3 +95,22 @@ test("library entries drop redundant inline photos but keep irreplaceable ones",
   noServerCopy.concepts = noServerCopy.concepts.map(c => ({ ...c, beforeImageUrl: undefined }));
   assert.equal(stripInlineImages(noServerCopy).sourceImages[0]!.base64?.length, 200000, "the only copy of a scan must never be discarded");
 });
+
+// The single-photo fixture above could not see this: only scans[0] is written server-side, so
+// stripping every source image lost the second and third angles for good (F18).
+test("library entries keep the photos the server does not hold", async () => {
+  const { stripInlineImages } = await import("../src/persistence");
+  const photos = [
+    { uri: "file:///a.jpg", base64: "a".repeat(1000) },
+    { uri: "file:///b.jpg", base64: "b".repeat(1000) },
+    { uri: "file:///c.jpg", base64: "c".repeat(1000) }
+  ];
+  const project = { ...withItems([item("a", 1000, [])]), sourceImages: photos };
+  project.concepts = project.concepts.map(c => ({ ...c, beforeImageUrl: "http://host/designs/a-before.jpg" }));
+  const stripped = stripInlineImages(project);
+  assert.equal(stripped.sourceImages[0]!.base64, undefined, "the server holds the first scan");
+  assert.equal(stripped.sourceImages[1]!.base64, "b".repeat(1000), "the second angle has no server copy");
+  assert.equal(stripped.sourceImages[2]!.base64, "c".repeat(1000), "the third angle has no server copy");
+  // Every photo is still addressable either way.
+  assert.deepEqual(stripped.sourceImages.map(i => i.uri), ["file:///a.jpg", "file:///b.jpg", "file:///c.jpg"]);
+});

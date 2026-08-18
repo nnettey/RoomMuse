@@ -122,8 +122,18 @@ export async function loadProjects(){
  * be far worse than the storage cost.
  */
 export function stripInlineImages(project:Project):Project{
+  // Only the FIRST scan is written server-side — /api/design saves scans[0] as "<id>-before.<ext>"
+  // and that is what beforeImageUrl points at. The second and third angles have no server copy at
+  // all, so dropping their base64 here made them unrecoverable once the device's local file URI
+  // expired: the user could reopen a saved project and find two of their three photos gone (F18),
+  // and refinement lost the extra views that S-1 showed are what make the render see the real room.
+  //
+  // So strip exactly what is provably held elsewhere and nothing more. This costs storage — roughly
+  // 275 KB per retained photo against the ~6 MB AsyncStorage ceiling measured in R8 — which is the
+  // right trade against losing a photo the user cannot retake. Persisting every scan server-side
+  // would recover that space; recorded as a follow-up rather than done here.
   if(!project.concepts.some(concept=>Boolean(concept.beforeImageUrl)))return project;
-  return{...project,sourceImages:project.sourceImages.map(image=>image.base64?{...image,base64:undefined}:image)};
+  return{...project,sourceImages:project.sourceImages.map((image,index)=>index===0&&image.base64?{...image,base64:undefined}:image)};
 }
 
 /**
