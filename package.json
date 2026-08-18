@@ -13,7 +13,7 @@
     "server": "node server/server.mjs",
     "test": "npm run test:unit",
     "build:web": "expo export --platform web --output-dir dist",
-    "test:unit": "tsc -p tsconfig.test.json && node .test-dist/tests/domain.test.js && node .test-dist/tests/integration.test.js",
+    "test:unit": "tsc -p tsconfig.test.json && node .test-dist/tests/domain.test.js && node .test-dist/tests/integration.test.js && node .test-dist/tests/runtime.test.js && node .test-dist/tests/rules.test.js && node .test-dist/tests/persistence.test.js",
     "test:e2e": "npm run build:web && playwright test e2e/roommuse.spec.ts",
     "test:visual": "npm run build:web && playwright test e2e/visual.spec.ts",
     "test:all": "npm run test:unit && npm run test:e2e && npm run test:visual"
