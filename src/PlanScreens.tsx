@@ -3,7 +3,8 @@
 // These render what the domain computes. No money maths, no policy — budgetSummary,
 // priceMovement and the project store own those, so every surface agrees.
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { confirmAction } from "./Dialog";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { budgetSummary, suggestSubstitutions, closesGap } from "./budget";
 import { priceMovement, projectStatus, selected } from "./domain";
@@ -147,15 +148,15 @@ export function ProjectLibraryScreen({ summaries, busy, onBack, onOpen, onDelete
               onPress={() => {
                 if (summary.status === "complete") return onSetStatus(summary.projectId, "in-progress");
                 // Completing freezes prices, so say so before doing it rather than after.
-                Alert.alert("Mark this project complete?", "Its prices will be kept as a record of what you paid and will not be refreshed again. You can reopen it later.",
-                  [{ text: "Not yet", style: "cancel" }, { text: "Mark complete", onPress: () => onSetStatus(summary.projectId, "complete") }]);
+                void confirmAction("Mark this project complete?", "Its prices will be kept as a record of what you paid and will not be refreshed again. You can reopen it later.", "Mark complete", "default", "Not yet")
+                  .then(ok => { if (ok) onSetStatus(summary.projectId, "complete"); });
               }}
             />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={"Delete " + summary.title}
-              onPress={() => Alert.alert("Delete this project?", "It will be removed from this device. This cannot be undone.",
-                [{ text: "Keep it", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => onDelete(summary.projectId) }])}
+              onPress={() => { void confirmAction("Delete this project?", "It will be removed from this device. This cannot be undone.", "Delete", "destructive", "Keep it")
+                .then(ok => { if (ok) onDelete(summary.projectId); }); }}
               style={s.delete}
             >
               <Text style={s.deleteText}>Delete</Text>

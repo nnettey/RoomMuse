@@ -2,7 +2,8 @@
 //
 // As with PlanScreens, the rules live in domain/constraints/budget — these screens present them.
 import React, { useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { confirmAction } from "./Dialog";
 import * as ImagePicker from "expo-image-picker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { budgetSummary } from "./budget";
@@ -87,8 +88,8 @@ export function ConstraintsScreen({ project, onBack, onSave }: { project: Projec
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={"Release constraint: " + constraint.label}
-                onPress={() => Alert.alert("Release this constraint?", `“${constraint.label}” will stop protecting your plan, and RoomMuse may suggest replacing it in future designs and budget changes.`,
-                  [{ text: "Keep it", style: "cancel" }, { text: "Release", style: "destructive", onPress: () => onSave(releaseConstraint(project, constraint.id)) }])}
+                onPress={() => { void confirmAction("Release this constraint?", `“${constraint.label}” will stop protecting your plan, and RoomMuse may suggest replacing it in future designs and budget changes.`, "Release", "destructive", "Keep it")
+                  .then(ok => { if (ok) onSave(releaseConstraint(project, constraint.id)); }); }}
                 style={s.release}
               >
                 <Text style={s.releaseText}>Release</Text>

@@ -21,3 +21,6 @@ local-*-host.html
 __pycache__/
 *.py[cod]
 
+
+# Throwaway patch scripts used to edit the minified sources; never part of the app.
+.patch/

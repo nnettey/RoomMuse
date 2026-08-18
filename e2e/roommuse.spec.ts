@@ -55,10 +55,15 @@ test("a constraint locks an item and releasing it requires confirmation",async({
   await expect(page.getByText("What should stay as it is?")).toBeVisible();
   await page.getByRole("button",{name:"Add constraint: Do not change the flooring"}).click();
   await expect(page.getByText("Do not change the flooring")).toBeVisible();
-  page.once("dialog",dialog=>dialog.dismiss());
   await page.getByRole("button",{name:"Release constraint: Do not change the flooring"}).click();
+  await expect(page.getByText("Release this constraint?")).toBeVisible();
+  await page.getByRole("button",{name:"Keep it"}).click();
   // Dismissing the confirmation must leave the constraint in place.
   await expect(page.getByRole("button",{name:"Release constraint: Do not change the flooring"})).toBeVisible();
+  // Confirming it must actually release it.
+  await page.getByRole("button",{name:"Release constraint: Do not change the flooring"}).click();
+  await page.getByRole("button",{name:"Release",exact:true}).click();
+  await expect(page.getByRole("button",{name:"Release constraint: Do not change the flooring"})).toHaveCount(0);
 });
 
 // WS-5b — REQ-3: photograph a product, see the effect, then apply it.
