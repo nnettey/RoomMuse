@@ -2,7 +2,8 @@
 //
 // As with PlanScreens, the rules live in domain/constraints/budget — these screens present them.
 import React, { useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { confirmAction } from "./Dialog";
 import * as ImagePicker from "expo-image-picker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { budgetSummary } from "./budget";
@@ -11,7 +12,7 @@ import { activeConstraints, addConstraint, createConstraint, releaseConstraint }
 import { identifyProduct, type IdentifyResult } from "./designService";
 import type { ComparisonResult, ConstraintKind, Item, Project } from "./enhancedTypes";
 
-const C = { ink: "#17211B", green: "#244C3B", paper: "#FCFBF7", line: "#DEDCD3", clay: "#B87958", muted: "#68706A", white: "#FFF", warn: "#963C33", good: "#2F6B4F" };
+import{C}from"./theme";
 const money = (n: number) => "$" + Math.round(n).toLocaleString();
 
 const Btn = ({ label, onPress, quiet = false, disabled = false }: { label: string; onPress: () => void; quiet?: boolean; disabled?: boolean }) => (
@@ -61,7 +62,7 @@ export function ConstraintsScreen({ project, onBack, onSave }: { project: Projec
       <Top title="Things to keep" back={onBack} />
       <ScrollView contentContainerStyle={s.content}>
         <Text style={s.h1}>What should stay as it is?</Text>
-        <Text style={s.body}>RoomMuse designs around these and will not propose replacing them. They are sent with every new plan, so they keep applying as the project changes.</Text>
+        <Text style={s.body}>Tracy’s Room Muse designs around these and will not propose replacing them. They are sent with every new plan, so they keep applying as the project changes.</Text>
 
         <TextInput accessibilityLabel="Describe something to keep" value={draft} onChangeText={setDraft} placeholder="For example: keep the bookcase by the window" placeholderTextColor="#9AA29C" style={s.input} />
         <Btn label="Add this constraint" disabled={!draft.trim()} onPress={() => add("keep-item", draft)} />
@@ -87,8 +88,8 @@ export function ConstraintsScreen({ project, onBack, onSave }: { project: Projec
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={"Release constraint: " + constraint.label}
-                onPress={() => Alert.alert("Release this constraint?", `“${constraint.label}” will stop protecting your plan, and RoomMuse may suggest replacing it in future designs and budget changes.`,
-                  [{ text: "Keep it", style: "cancel" }, { text: "Release", style: "destructive", onPress: () => onSave(releaseConstraint(project, constraint.id)) }])}
+                onPress={() => { void confirmAction("Release this constraint?", `“${constraint.label}” will stop protecting your plan, and Tracy’s Room Muse may suggest replacing it in future designs and budget changes.`, "Release", "destructive", "Keep it")
+                  .then(ok => { if (ok) onSave(releaseConstraint(project, constraint.id)); }); }}
                 style={s.release}
               >
                 <Text style={s.releaseText}>Release</Text>
@@ -166,7 +167,7 @@ export function FieldScreen({ project, onBack, onSave }: { project: Project; onB
       <Top title="Found in store" back={onBack} />
       <ScrollView contentContainerStyle={s.content}>
         <Text style={s.h1}>Use something you found</Text>
-        <Text style={s.body}>Photograph it and RoomMuse will check it against {concept.title}, then show what it does to your plan before anything changes.</Text>
+        <Text style={s.body}>Photograph it and Tracy’s Room Muse will check it against {concept.title}, then show what it does to your plan before anything changes.</Text>
 
         {image && <Image source={{ uri: image.uri }} style={s.upload} />}
         <Btn label={image ? "Choose a different photo" : "Take or choose a product photo"} quiet onPress={async () => { const next = await pickPhoto(); if (next) { setImage(next); setResult(undefined); } }} />

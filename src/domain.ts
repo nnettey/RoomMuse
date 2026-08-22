@@ -236,3 +236,30 @@ export function compareConcepts(p:Project,conceptIds:string[]):ComparisonResult{
   if(concepts.length>1)tradeoffs.push(shared?shared+" product"+(shared>1?"s are":" is")+" common to these directions; the rest differ.":"These directions share no products, so they are genuinely different plans.");
   return{kind:"concept",refIds:concepts.map(c=>c.id),rows,tradeoffs};
 }
+
+/**
+ * Take a verified lower price into the plan (F17).
+ *
+ * "Check shopping deals" used to be display-only: it stored project.deals and nothing else, so a
+ * better price the app had already verified never reached the shopping list and never moved the
+ * remaining-to-purchase figure the user was making decisions from.
+ *
+ * This reuses the machinery that already exists rather than building a parallel one: swapItem for
+ * the product change, appendObservation for the append-only price record the user asked us to keep.
+ * Each observation carries its own url, so a history that spans a swap still says exactly which
+ * product each price belonged to.
+ *
+ * Refused for anything already bought or owned — their price is a record of what was paid — and for
+ * completed projects, which are frozen snapshots.
+ */
+export function applyDeal(p:Project,conceptId:string,itemId:string,alternative:Alternative):Project{
+  if(!canRefreshPrices(p))return p;
+  const concept=p.concepts.find(c=>c.id===conceptId);
+  if(!concept)return p;
+  const item=concept.shoppingItems.find(i=>i.id===itemId);
+  if(!item||item.isRemoved||item.isPurchased||item.isOwned||item.checked)return p;
+  if(!(alternative.unitPrice<item.unitPrice))return p;
+  const swapped=swapItem(concept,itemId,alternative);
+  const observation:PriceObservation={price:alternative.unitPrice,currency:"USD",observedAt:alternative.lastPriceCheckedAt??new Date().toISOString(),availability:alternative.availability,source:"verified",url:alternative.purchaseUrl};
+  return replace(p,{...swapped,shoppingItems:swapped.shoppingItems.map(i=>i.id===itemId?appendObservation(i,observation):i)});
+}

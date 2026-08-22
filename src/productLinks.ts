@@ -11,6 +11,8 @@ const retailerProductPaths: [string, RegExp][] = [
   ["crateandbarrel.com", /\/[sf]\d+$/],
   ["lampsplus.com", /^\/(p|products)\//],
   ["rugsusa.com", /^\/products\//],
+  ["cb2.com", /\/[sf]\d+$/],
+  ["allmodern.com", /\/pdp\//],
 ];
 
 export function isDirectProductUrl(value?: string) {

@@ -22,7 +22,7 @@ Rules:
 4. **Never weaken or delete a test** to make your work pass. Record the conflict in §9 instead.
 5. Append to logs; do not rewrite history in this file.
 
-Last updated: 2026-08-17 — by: Lead session — reason: S-1 resolved and implemented; URL gate widened; model migration complete.
+Last updated: 2026-08-18 — by: Remediation session — reason: user-test findings F1–F21; branch `fix/user-test-findings`.
 
 ---
 
@@ -291,3 +291,139 @@ weakening an assertion. Every such change must be justified line by line in this
 
 Not started. WS-6 owns final integration, the full regression sweep, visual re-baselining, the live-data smoke
 test, and the end-to-end acceptance checklist in `PLAN.md` §11.
+
+---
+
+## 12. User-test remediation (2026-08-18, branch `fix/user-test-findings`)
+
+Working through F1–F21 in `HANDOFF.md` §6. Baseline measured on the branch point before any edit:
+typecheck clean, **unit 70/70**, **e2e 15/15**, visual not run (known stale, G2).
+
+### 12.1 The finding that reframed five others
+
+**The user tested in Chrome on iPhone** — the react-native-web build, over plain `http://` on the LAN.
+This was not known when the handoff was written and it is the root cause of three "dead button"
+findings at once:
+
+| Fact | Consequence |
+|---|---|
+| `react-native-web`'s `Alert` is literally `class Alert { static alert() {} }` | All 13 `Alert.alert` call sites were **invisible** on the test device. Also silently disabled "Mark complete" and "Delete project" in the project library |
+| `navigator.share` and `navigator.clipboard` require a **secure context** | `Share.share` rejects and the clipboard fallback fails, so both share buttons did nothing (F4, F5) |
+| `getUserMedia` requires a secure context | The request fails instantly with no prompt, yet expo-camera's web shim still reports `canAskAgain:true`, so `allowCamera` took the "ask again" branch and raised an unrenderable Alert (F3) |
+
+**Consequence for F21:** the HTTPS tunnel is not only a distribution task — it is the real fix for
+F3/F4/F5 on the user's own surface. Sequenced accordingly.
+
+### 12.2 Findings that were not what they looked like
+
+| Finding | Reported | Actual |
+|---|---|---|
+| **F13** | "Shopping plan looks like seed data" | **Confirmed not seed data.** `createProject` always receives `legacy`, server items overwrite every concept (`domain.ts:31-58`), and `tests/domain.test.ts` pins it. Real causes recorded in §12.4 |
+| **F6** | "Remaining does not update on quantity change" | Does not reproduce — `itemTotal` already multiplies by quantity. The real defect: "estimated total" used `domain.total()`, which **includes owned items**, while "remaining" excluded them, so on an owned/purchased item one figure moved and the other did not |
+| **F14** | "~40s Matching real products" | The client stage list is timer-driven and **clamps on that label for the whole wait** (`domain.ts:2-12`). The server genuinely is doing product work though: `/api/design` still calls `resolveShoppingItems` (`server.mjs:864`) even though decision **A2 moved product resolution to `/api/shopping-plan`. Only half of A2 shipped — the removal never did.** That work is discarded and is not even budget-aware |
+
+### 12.3 Defects found while verifying, not in the original list
+
+- **The e2e suite was not hermetic.** On web `API_BASE_URL` resolves to port 3201 and persistence
+  syncs projects to `GET|PUT /api/projects/:id`. With a development server running — the normal
+  state of a working machine — the journeys wrote their fixtures to it and read them back on later
+  runs. `p-seeded` came back with `status:"in-progress"` and a constraint already active, failing two
+  journeys for reasons unrelated to any change. The suite now blocks project sync in `beforeEach`.
+- **An optional sync failure destroyed a local save.** `pushProject` throws on any non-ok response
+  and the exception escaped `saveProject`, so `saveToLibrary` never reached the line recording the
+  library entry. A missing or unreachable server therefore meant **saved projects silently never
+  appeared in "Your saved projects"** — directly relevant to F18 — and, once dialogs became visible,
+  an interrupting modal on every debounced save. Sync now degrades to the local copy.
+  `src/persistence.ts` is not in the unit-test compile set; the refine journey is its regression net
+  and did catch this.
+
+### 12.4 Decisions taken with the user
+
+| ID | Decision | Made by |
+|---|---|---|
+| U1 | **Performance: do both** — cut real latency *and* replace the fake progress with real server-reported stages | User |
+| U2 | **Distribution: tunnel + shared secret.** No public hosting yet. The server has no auth, wide-open CORS and holds the OpenAI key, so the token lands before the tunnel | User, after the security position was put to them explicitly |
+| U3 | **Merge the two budget screens** into one live-editable screen; the save/balanced/invest tiers become a savings-strategy control inside it (resolves G4 with F10) | User |
+| U4 | **Brand accent `#A31621`, distinct from `warn #963C33`, separated by form as well as hue.** Warnings stay filled tinted cards with an icon and an explicit word; the accent only appears as a thin mark on paper, never carrying a message, never on a destructive control | This session; screenshots taken to check rather than assume |
+
+### 12.5 Progress
+
+| Date | Phase | Event |
+|---|---|---|
+| 2026-08-18 | 0 | Branch cut. Baseline measured: typecheck clean, unit 70/70, e2e 15/15 |
+| 2026-08-18 | 1 | **F3, F4, F5 fixed.** New `src/Dialog.tsx` — one cross-platform dialog host replacing every `Alert.alert`. Share gained a third, always-available level (share sheet → clipboard → selectable text) and no longer treats a cancelled sheet as failure. Camera checks for a secure context before requesting, reports every failure, answers the user's question in copy (the permission is a one-time device grant and is optional), and no longer strands the user on "Preparing camera...". The constraint-release journey was passing vacuously — it waited on `page.once("dialog")` for a platform dialog that never fired — and now asserts both halves of the guarantee. Gates: unit 70/70, e2e 15/15 |
+| 2026-08-18 | 2 | **F6, F12 fixed.** `budget.ts` gains `planTotals(items, filter)`; the estimated total is now projected spend so both headline figures share one predicate set. `budgetSummary` takes the same filter. `ShoppingScreen`, the share summary and `ProjectHub` all read it. Two never-rendered components carrying a third copy of the money maths were removed from `RoomMuseApp`. Also fixed the two defects in §12.3. Gates: unit 76/76, **e2e 16/16** |
+| 2026-08-18 | 3 | **F1, F2 done.** Renamed to "Tracy's Room Muse" in user interfaces only — storage keys, slug, scheme, bundle id, package name, analytics prefix and route names verified unchanged. The palette moved into `src/theme.ts` and the five duplicated `const C` declarations plus `ResilientImage`'s inlined hexes now import it. Accent placed on five "this is your choice" surfaces. Gates: unit 76/76, e2e 16/16. **Visual baselines are now knowingly stale** — regenerated in their own commit at the end (G2) |
+| 2026-08-18 | 4 | **F7, F8, F9, F16, F18, F19 done.** The concepts page drops the three-press ladder and moves "Save as selected design" below the comparison. `previous` is replaced by a real history stack with an unwind rule, transient/unrenderable targets skipped, and all 17 chevrons sharing one definition of back. The shopping plan gains "Finish and review project" (and the undo toast moved up to clear it). The hub gains the library and a new-room entry. `stripInlineImages` no longer discards photos the server never held. Gates: unit 77/77, e2e 16/16 |
+| 2026-08-18 | 5 | **F10, F11, G4 done.** One budget screen replaces two. Cost drivers became interactive rows (quantity, remove, one-tap verified swap) with a removed-items section, all routed through `updateItem`/`swapItem` and guarded by `canModifyItem`. Visible Done beside the numeric field. Tiers demoted to a savings-strategy control. Gates: unit 77/77, e2e 16/16 |
+| 2026-08-18 | 6 | **F13, F17, G6 done.** Budget became a real per-piece ceiling over verified products rather than prompt prose; Skip is explicit; roomDimensions is sent; a missing analysis is honest. Allowlist widened to 13 with verified patterns only. `applyDeal` makes accepted deals move the price, the totals and the append-only history. Gates: unit 81/81, e2e 16/16 |
+| 2026-08-18 | 7 | **F14, F15, F20 addressed — see the measurements below.** The discarded product search is gone from `/api/design`; the parse timeout matches the path that works; the invented progress bar is replaced by a job the client polls. Gates: unit 81/81, e2e 16/16 |
+| 2026-08-18 | 8 | **F21 done.** Token, per-IP hourly cap and CORS restriction on the studio; forwarded-proto image URLs; `-Tunnel` now requires a public HTTPS API address and refuses to run without a token. Verified against a running server. Gates: unit 81/81, e2e 16/16 |
+| 2026-08-18 | 9 | **G2 done.** 108 baselines across 18 states and 6 viewports, in their own commit, with the same isolation as the journeys. Verified stable on a second run |
+
+### 12.6 Measured, on the room the user tested with
+
+`spike-room-photos`, compressed exactly as the app compresses before upload (1600px / q0.72 — the
+first attempt sent the 5 MB originals, 27 MB of base64, and timed the analysis out; that was the
+harness being unrepresentative, not the server).
+
+| | Before | After | Note |
+|---|---|---|---|
+| `POST /api/design` | ~67s (handoff) | **74s** | **Render-bound, not search-bound.** Analysis finished at 30s while the three renders finished at 74s, so removing the discarded product search saves real money and API load but not wall time |
+| `POST /api/shopping-plan` | ~60s measured / ~100s reported | **80s**, 9 items, **0 unresolved**, **9/9 verified with direct product links** | |
+| Budget adherence | not enforced | **$4,227 projected against a $6,000 budget** | The F13 ceiling working on live data |
+| Widened retailers | — | **AllModern and CB2 both supplied verified products** | Direct evidence G6 helped rather than merely widening a list |
+
+**The correction that matters, and it contradicts this session's own first diagnosis:** F14's
+"~40s Matching Real products" was **not** a server stage. The client's progress list advanced one
+label per 700ms and then clamped on that label for the remainder of the wait, so the user was
+watching a label that had nothing to do with what was running. The renders were what they were
+waiting for. Removing the wasted search was still correct — 5 to 15 live web searches whose results
+were discarded — but it is a cost fix, not a latency fix, and the latency fix is honesty.
+
+The wait now reports what is actually happening:
+
+```
+[2s]  Reading the room
+[30s] Planning the layout — Understood the Open-plan living room with an integrated
+      home-office zone and visible stair/landing circulation
+[50s] Rendering your room — 1 of 3 directions complete
+[56s] Rendering your room — 2 of 3 directions complete
+[74s] Done
+```
+
+### 12.7 Deliberately not done, with reasons
+
+| Item | Why |
+|---|---|
+| **Product-price cache** | Would help re-runs, but a cached price is not a price confirmed now, and REQ-11 defines verified as confirmed on the retailer's own page with a current price at a recorded time. The integrity rule outranks the speed gain |
+| **Concurrency cap on the search fan-out** | `tests/integration.test.ts` deliberately pins its absence, and at ≤5 batches it is not needed |
+| **article.com, worldmarket.com, ruggable.com, serenaandlily.com** | Their direct-product URL shape could not be verified. An unlisted domain falls through `isDirectProductUrl`'s default, so adding one without a verified pattern would admit the category and search pages the gate exists to stop |
+| **Sending budget/constraints to `/api/design`** | Listed in the triage, but `/api/design` runs before either exists. That item was wrong |
+| **Persisting every scan server-side** | Would recover the ~275 KB per photo that keeping the extra angles inline now costs. Worth doing; not needed to close F18 |
+| **EAS / TestFlight** | Out of scope for U2. Prerequisites recorded: no `eas.json`, and `app.json` has no `owner`, no `extra.eas.projectId` and no `android` block |
+| **G3 (templated REQ-8 rationale), G7, G8** | Untouched; still open |
+
+### 12.8 Final gate state
+
+| Gate | Baseline at branch point | Now |
+|---|---|---|
+| `npm run typecheck` | clean | clean |
+| `npm run test:unit` | 70/70 | **81/81** |
+| `npm run test:e2e` | 15/15 | **16/16** |
+| `npm run test:visual` | stale, not runnable | **108/108** (18 states × 6 viewports) |
+
+Every test change in this branch was a locator or a step matching an intentional change, or an added
+case. No assertion was weakened, loosened, skipped or deleted. Two journeys were found to be passing
+**vacuously** and were strengthened: the constraint-release journey waited on `page.once("dialog")`
+for a platform dialog that react-native-web can never fire, and two journeys asserted that Back
+reaches the project hub — which is precisely the behaviour F7 reports as broken.
+
+### 12.9 What still needs the user
+
+- **Device verification on the real surface.** Everything here is verified in a browser at an iPhone
+  viewport, on the server, or in tests. Chrome on iPhone through the HTTPS tunnel is the check that
+  matters for F3/F4/F5, and it has not been run.
+- **The red.** `#A31621` on five surfaces is a judgement made from screenshots; it is Tracy's call.
+- **Whether `/api/design` at ~74s is acceptable.** It is render-bound, so going faster means fewer or
+  lower-quality renders — a product decision, not an optimisation.

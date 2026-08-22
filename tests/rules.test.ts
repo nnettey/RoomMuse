@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { styles, concepts } from "../src/enhancedData";
-import { addFieldItem, applyBudget, appendObservation, applyPriceRefresh, canRefreshPrices, compareConcepts, compareProducts, completeProject, createProject, isFavorited, mergePriceHistory, priceMovement, projectStatus, reopenProject, replace, revertSubstitution, selected, substituteItem, toggleFavorite, total, updateItem } from "../src/domain";
-import { budgetSummary, closesGap, costDrivers, projectedSpend, suggestSubstitutions } from "../src/budget";
+import { addFieldItem, applyBudget, appendObservation, applyDeal, applyPriceRefresh, canRefreshPrices, compareConcepts, compareProducts, completeProject, createProject, isFavorited, mergePriceHistory, priceMovement, projectStatus, reopenProject, replace, revertSubstitution, selected, substituteItem, toggleFavorite, total, updateItem } from "../src/domain";
+import { budgetSummary, closesGap, costDrivers, planTotals, projectedSpend, suggestSubstitutions } from "../src/budget";
 import { addConstraint, canModifyItem, constraintsFromDecisions, createConstraint, applyConstraintsToConcept, constraintPrompts, releaseConstraint } from "../src/constraints";
 import type { Alternative, Item, PriceObservation, Project } from "../src/enhancedTypes";
 
@@ -192,4 +192,139 @@ test("concept comparison reports the cost gap and whether the plans really diffe
   const result = compareConcepts(project, [a.id, b.id]);
   assert.match(result.tradeoffs.join(" "), /costs about \$400 more/);
   assert.match(result.tradeoffs.join(" "), /share no products/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// F6: the shopping plan showed "estimated project total" from domain.total(), which counts pieces
+// the user already owns, while "remaining to purchase" excluded them. Changing the quantity of an
+// owned or already-bought item therefore moved one figure and not the other. Both figures now come
+// from the same predicate set, so the two must move together or not at all.
+test("both headline figures respond to a quantity change on the same item", () => {
+  const items = [verified("a", "Sofa", 1000), verified("b", "Rug", 500)];
+  const before = planTotals(items);
+  const after = planTotals([{ ...items[0]!, quantity: 2 }, items[1]!]);
+  assert.equal(before.estimatedTotal, 1500);
+  assert.equal(before.remainingToPurchase, 1500);
+  assert.equal(after.estimatedTotal, 2500);
+  assert.equal(after.remainingToPurchase, 2500);
+});
+
+test("an owned item is excluded from both figures, not just one of them", () => {
+  const owned = { ...verified("a", "Existing sofa", 1000), isOwned: true } as Item;
+  const items = [owned, verified("b", "Rug", 500)];
+  const totals = planTotals(items);
+  // The old estimated total would have read 1500 here while remaining read 500 — the F6 symptom.
+  assert.equal(totals.estimatedTotal, 500);
+  assert.equal(totals.remainingToPurchase, 500);
+  assert.equal(totals.alreadyOwned, 1000);
+  // And raising its quantity must not move either figure, because no money is involved.
+  const raised = planTotals([{ ...owned, quantity: 3 } as Item, items[1]!]);
+  assert.equal(raised.estimatedTotal, 500);
+  assert.equal(raised.remainingToPurchase, 500);
+});
+
+test("a purchased item leaves remaining but stays in the estimated total", () => {
+  const items = [{ ...verified("a", "Sofa", 1000), isPurchased: true } as Item, verified("b", "Rug", 500)];
+  const totals = planTotals(items);
+  assert.equal(totals.estimatedTotal, 1500);
+  assert.equal(totals.remainingToPurchase, 500);
+  assert.equal(totals.alreadyPurchased, 1000);
+});
+
+// F12: the priority chips filtered the list but not the numbers, so narrowing to "Essential" left
+// the totals describing the whole plan and could not inform the decision the filter exists for.
+test("the priority filter narrows both headline figures and the item count", () => {
+  const items = [
+    { ...verified("a", "Sofa", 1000), priority: "Essential" } as Item,
+    { ...verified("b", "Rug", 500), priority: "High impact" } as Item,
+    { ...verified("c", "Vase", 80), priority: "Finishing touch" } as Item
+  ];
+  assert.equal(planTotals(items, "All").estimatedTotal, 1580);
+  assert.equal(planTotals(items, "All").itemCount, 3);
+  const essential = planTotals(items, "Essential");
+  assert.equal(essential.estimatedTotal, 1000);
+  assert.equal(essential.remainingToPurchase, 1000);
+  assert.equal(essential.itemCount, 1);
+  assert.equal(essential.filter, "Essential");
+});
+
+test("budgetSummary reports variance against the filtered slice it is asked about", () => {
+  const items = [
+    { ...verified("a", "Sofa", 1000), priority: "Essential" } as Item,
+    { ...verified("b", "Rug", 500), priority: "Finishing touch" } as Item
+  ];
+  const budget = { total: 1200, currency: "USD" as const, setAt: at(1) };
+  const all = budgetSummary(items, budget);
+  assert.equal(all.projectedSpend, 1500);
+  assert.equal(all.overBudget, true);
+  assert.equal(all.variance, -300);
+  const essentialOnly = budgetSummary(items, budget, "Essential");
+  assert.equal(essentialOnly.projectedSpend, 1000);
+  assert.equal(essentialOnly.overBudget, false);
+  assert.equal(essentialOnly.variance, 200);
+});
+
+// A removed item is out of the plan entirely, whatever the filter says.
+test("removed items are absent from every figure", () => {
+  const items = [verified("a", "Sofa", 1000), { ...verified("b", "Rug", 500), isRemoved: true } as Item];
+  const totals = planTotals(items);
+  assert.equal(totals.estimatedTotal, 1000);
+  assert.equal(totals.remainingToPurchase, 1000);
+  assert.equal(totals.itemCount, 1);
+});
+
+// ---------------------------------------------------------------------------------------------
+// F17 — "Check shopping deals" was display-only: it stored project.deals and never touched a price,
+// so a better verified price never reached the shopping list or the remaining-to-purchase figure.
+const dealAlternative = (price: number): Alternative => ({
+  id: "alt-deal", name: "Haven compact linen sofa", retailer: "Wayfair",
+  purchaseUrl: "https://www.wayfair.com/furniture/pdp/haven-sofa-w001.html",
+  unitPrice: price, dimensions: "80 in W", finish: "Linen", difference: "Balanced tier verified product",
+  available: true, availability: "In stock", priceStatus: "verified", lastPriceCheckedAt: at(5),
+  budgetTier: "balanced", provenance: "verified"
+} as Alternative);
+
+function projectWithDeal(price = 899) {
+  const base = createProject(style, []);
+  const item = { ...verified("sofa", "Fielding sofa", 1299), alternatives: [dealAlternative(price)] } as Item;
+  return replace(base, { ...selected(base)!, shoppingItems: [item] });
+}
+
+test("taking a deal moves the price, the plan total and the remaining figure", () => {
+  const project = projectWithDeal();
+  const conceptId = selected(project)!.id;
+  assert.equal(planTotals(selected(project)!.shoppingItems).remainingToPurchase, 1299);
+  const next = applyDeal(project, conceptId, "sofa", dealAlternative(899));
+  const item = selected(next)!.shoppingItems[0]!;
+  assert.equal(item.unitPrice, 899);
+  assert.equal(item.name, "Haven compact linen sofa");
+  assert.equal(planTotals(selected(next)!.shoppingItems).estimatedTotal, 899);
+  assert.equal(planTotals(selected(next)!.shoppingItems).remainingToPurchase, 899);
+});
+
+test("taking a deal records the price change rather than overwriting it", () => {
+  const project = projectWithDeal();
+  const next = applyDeal(project, selected(project)!.id, "sofa", dealAlternative(899));
+  const history = selected(next)!.shoppingItems[0]!.priceHistory ?? [];
+  // Append-only: the price it was, and the price it became, each identified by its own url.
+  assert.equal(history.length, 2);
+  assert.deepEqual(history.map(o => o.price).sort((a, b) => a - b), [899, 1299]);
+  const applied = history.find(o => o.price === 899)!;
+  assert.equal(applied.source, "verified");
+  assert.equal(applied.url, "https://www.wayfair.com/furniture/pdp/haven-sofa-w001.html");
+});
+
+test("a deal is refused for a piece already purchased or owned, and for a completed project", () => {
+  const purchased = (() => { const p = projectWithDeal(); const c = selected(p)!; return replace(p, { ...c, shoppingItems: [{ ...c.shoppingItems[0]!, isPurchased: true }] }); })();
+  assert.equal(selected(applyDeal(purchased, selected(purchased)!.id, "sofa", dealAlternative(899)))!.shoppingItems[0]!.unitPrice, 1299);
+  const owned = (() => { const p = projectWithDeal(); const c = selected(p)!; return replace(p, { ...c, shoppingItems: [{ ...c.shoppingItems[0]!, isOwned: true }] }); })();
+  assert.equal(selected(applyDeal(owned, selected(owned)!.id, "sofa", dealAlternative(899)))!.shoppingItems[0]!.unitPrice, 1299);
+  const done = completeProject(projectWithDeal());
+  assert.equal(selected(applyDeal(done, selected(done)!.id, "sofa", dealAlternative(899)))!.shoppingItems[0]!.unitPrice, 1299);
+});
+
+test("a deal that is not actually cheaper is refused", () => {
+  const project = projectWithDeal(1400);
+  const next = applyDeal(project, selected(project)!.id, "sofa", dealAlternative(1400));
+  assert.equal(selected(next)!.shoppingItems[0]!.unitPrice, 1299);
 });

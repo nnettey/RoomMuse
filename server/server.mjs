@@ -1,7 +1,7 @@
 import http from "node:http";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 if (existsSync(".env")) {
   for (const line of readFileSync(".env", "utf8").split(/\r?\n/)) {
@@ -15,6 +15,13 @@ function expandWindowsEnv(value) {
 }
 
 const port = Number(process.env.PORT ?? 3201);
+// A shared secret every client must present. Absent, the server stays open and says so at startup —
+// that keeps the existing LAN workflow working unchanged, and makes the exposed case a deliberate
+// choice rather than an accident.
+const apiToken = (process.env.ROOMMUSE_API_TOKEN ?? "").trim();
+// Comma-separated origins for CORS. Absent, "*" as before.
+const allowedOrigins = (process.env.ROOMMUSE_ALLOWED_ORIGINS ?? "")
+  .split(",").map(value => value.trim()).filter(Boolean);
 const apiKey = process.env.OPENAI_API_KEY;
 
 // Model roles.
@@ -91,7 +98,9 @@ function isDirectProductUrl(value) {
       ["potterybarn.com", /^\/products\//],
       ["crateandbarrel.com", /\/[sf]\d+$/],
       ["lampsplus.com", /^\/(p|products)\//],
-      ["rugsusa.com", /^\/products\//]
+      ["rugsusa.com", /^\/products\//],
+      ["cb2.com", /\/[sf]\d+$/],
+      ["allmodern.com", /\/pdp\//]
     ];
     const retailer = retailerPatterns.find(([domain]) => hostname === domain || hostname.endsWith(`.${domain}`));
     return retailer ? retailer[1].test(path) : true;
@@ -131,7 +140,7 @@ function responseText(payload) {
 const retailerDomains = [
   "wayfair.com", "homedepot.com", "lowes.com", "target.com", "walmart.com",
   "ikea.com", "westelm.com", "potterybarn.com", "crateandbarrel.com",
-  "lampsplus.com", "rugsusa.com"
+  "lampsplus.com", "rugsusa.com", "cb2.com", "allmodern.com"
 ];
 function sourceUrlKey(value) {
   try {
@@ -224,7 +233,7 @@ async function resolveProductBatch(entries, style, context = {}) {
       body: JSON.stringify({
         model: productSearchModel,
         tools: [{ type: "web_search", search_context_size: "medium", user_location: { type: "approximate", country: "US" } }],
-        input: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. ${guidance} Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.`
+        input: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw, unitCeiling }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish, ...(unitCeiling ? { maxUnitPriceUsd: unitCeiling } : {}) })))}. Where a request states maxUnitPriceUsd, prefer products at or below it; report a higher-priced product only when nothing suitable exists below it, and never adjust or estimate a price to fit. Use only these retailers: ${retailerDomains.join(", ")}. ${guidance} Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.`
       })
     });
     if (!searchResponse.ok) throw new Error(`product search returned ${searchResponse.status}: ${(await searchResponse.text()).slice(0, 180)}`);
@@ -241,7 +250,9 @@ async function resolveProductBatch(entries, style, context = {}) {
     const parseResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(20000),
+      // Matches the timeout the same parse gets in refreshProductPrices. At 20s a slow parse threw
+      // the whole batch away and sent every item in it round the expensive fallback pass.
+      signal: AbortSignal.timeout(60000),
       body: JSON.stringify({
         model: productParseModel,
         input: `Convert the cited retailer search into the required JSON. Preserve requestIndex and infer tier from explicit labels or relative price. Use ONLY these exact cited product URLs: ${JSON.stringify([...sourceUrls])}. Omit claims without an exact cited URL and numeric current USD price. Search text: ${searchText.slice(0, 20000)}`,
@@ -271,15 +282,28 @@ async function resolveProductBatch(entries, style, context = {}) {
 async function resolveShoppingItems(analysis, style, conceptId, context = {}) {
   const checkedAt = new Date().toISOString();
   const source = sourceShoppingItems(analysis);
+  // A per-piece share of the budget, allocated in proportion to the brief's own expected cost.
+  // This is an allocation rule over the model's estimates, not an invented price: it never appears
+  // in the plan, it only decides which of the verified products found is the right one to take.
+  const quantityOf = raw => Math.max(1, Math.min(12, Math.round(Number(raw.quantity) || 1)));
+  const expected = source.map(raw => Math.max(10, Math.round(Number(raw.estimatedUnitPrice) || 100)) * quantityOf(raw));
+  const expectedTotal = expected.reduce((sum, value) => sum + value, 0);
+  const budgetTotal = Number(context.budget?.total) > 0 ? Number(context.budget.total) : undefined;
+  const unitCeiling = index => {
+    if (!budgetTotal || !expectedTotal) return undefined;
+    const raw = source[index];
+    if (!raw) return undefined;
+    return Math.round((budgetTotal * (expected[index] / expectedTotal)) / quantityOf(raw));
+  };
   const batches = [];
   for (let index = 0; index < source.length; index += 2) {
-    batches.push(source.slice(index, index + 2).map((raw, offset) => ({ requestIndex: index + offset, raw })));
+    batches.push(source.slice(index, index + 2).map((raw, offset) => ({ requestIndex: index + offset, raw, unitCeiling: unitCeiling(index + offset) })));
   }
   const resolvedBatches = await Promise.all(batches.map(batch => resolveProductBatch(batch, style, context)));
   const choicesByIndex = new Map();
   for (const batch of resolvedBatches) for (const [index, choices] of batch) choicesByIndex.set(index, choices);
   const unmatched = source
-    .map((raw, requestIndex) => ({ requestIndex, raw }))
+    .map((raw, requestIndex) => ({ requestIndex, raw, unitCeiling: unitCeiling(requestIndex) }))
     .filter(entry => !(choicesByIndex.get(entry.requestIndex)?.length));
   const fallbackBatches = await Promise.all(unmatched.map(entry => resolveProductBatch([entry], style, context)));
   for (const batch of fallbackBatches) {
@@ -290,7 +314,15 @@ async function resolveShoppingItems(analysis, style, conceptId, context = {}) {
     const requestedName = String(raw.name ?? `${style} room piece`).slice(0, 100);
     const estimatedPrice = Math.max(10, Math.round(Number(raw.estimatedUnitPrice) || 100));
     const choices = choicesByIndex.get(index) ?? [];
-    const primary = choices.find(product => product.tier === "balanced") ?? choices.find(product => product.tier === "invest") ?? choices[0];
+    const ceiling = unitCeiling(index);
+    const affordable = ceiling ? choices.filter(product => Number(product.currentPrice) <= ceiling) : [];
+    const primary = !ceiling
+      ? (choices.find(product => product.tier === "balanced") ?? choices.find(product => product.tier === "invest") ?? choices[0])
+      : affordable.length
+        // The best piece that fits the share, not the cheapest — the budget is a ceiling, not a target.
+        ? affordable.slice().sort((a, b) => Number(b.currentPrice) - Number(a.currentPrice))[0]
+        // Nothing fits: keep the cheapest real product rather than dropping the piece or inventing one.
+        : choices.slice().sort((a, b) => Number(a.currentPrice) - Number(b.currentPrice))[0];
     const verified = Boolean(primary);
     const base = {
       name: primary?.productName ?? requestedName,
@@ -362,6 +394,37 @@ const palettes = {
   "French Country": ["#9BA79A", "#6D7B8B", "#EFE4D2"]
 };
 
+// The design-time piece list: what the room needs, before anything has been sourced.
+// Deliberately carries no retailer and no purchase URL, so nothing here can be mistaken for a
+// verified product. Real products, prices and links arrive from /api/shopping-plan.
+function briefItems(analysis, style, conceptId) {
+  return sourceShoppingItems(analysis).map((raw, index) => {
+    const category = ["Furniture", "Lighting", "Textiles", "Window treatments", "Finishes", "Art", "Decor"].includes(raw.category) ? raw.category : "Decor";
+    const name = String(raw.name ?? `${style} room piece`).slice(0, 100);
+    return {
+      id: `${conceptId}-room-${index}`,
+      conceptId,
+      name,
+      category,
+      description: String(raw.description ?? name),
+      quantity: Math.max(1, Math.min(12, Math.round(Number(raw.quantity) || 1))),
+      unitPrice: Math.max(10, Math.round(Number(raw.estimatedUnitPrice) || 100)),
+      retailer: "Not yet sourced",
+      purchaseUrl: "",
+      dimensions: String(raw.dimensions ?? "Confirm against field measurements"),
+      finish: String(raw.finish ?? "Coordinate with the selected palette"),
+      rationale: String(raw.rationale ?? `Selected for its role in the photographed room and the ${style} design.`),
+      priority: ["Essential", "High impact", "Finishing touch"].includes(raw.priority) ? raw.priority : "High impact",
+      isOwned: Boolean(raw.retainedExisting),
+      isStructurallyImportant: raw.priority === "Essential",
+      priceStatus: "estimate",
+      provenance: "generated",
+      availability: "A design estimate. Build the shopping plan to find the real product, price and link.",
+      matchIndicators: [`Grounded in photographed ${analysis.roomType ?? "room"}`, `Matches ${style} direction`]
+    };
+  });
+}
+
 function concept(style, id, beforeImageUrl, imageDataUrl, roomAnalysis, shoppingItems, variants = []) {
   return { id, title: style + " Signature", style, beforeImageUrl, imageDataUrl,
     summary: "A room-grounded " + style.toLowerCase() + " direction with deliberate layout, lighting, materials, and pieces.",
@@ -392,7 +455,7 @@ function inputImageInfo(buffer) {
 //     views influenced the result only weakly.
 // So all three photos now contribute to the image, not just the analysis (REQ-4).
 async function renderRoom(scans, style, conceptName = "Signature", instructions = "") {
-  if (!apiKey) throw new Error("AI rendering is not configured yet. Add OPENAI_API_KEY to the local .env file and restart the RoomMuse studio.");
+  if (!apiKey) throw new Error("AI rendering is not configured yet. Add OPENAI_API_KEY to the local .env file and restart Tracy’s Room Muse.");
   const views = (Array.isArray(scans) ? scans : [scans]).filter(Boolean);
   if (!views.length) throw new Error("At least one room image is required to render a design.");
   const direction = conceptName === "Refined"
@@ -545,21 +608,32 @@ function handleShoppingPlanRequest(req, res) {
   req.on("end", async () => {
     const started = Date.now();
     if (tooLarge) return send(res, 413, { error: "The shopping plan request is too large." });
+    let job;
     try {
-      const { conceptId, conceptName = "Signature", style = "Modern", roomAnalysis, budget, constraints, retainedItems, roomDimensions } = JSON.parse(raw);
+      const { conceptId, conceptName = "Signature", style = "Modern", roomAnalysis, budget, constraints, retainedItems, roomDimensions, async: wantsJob } = JSON.parse(raw);
       if (!conceptId) return send(res, 400, { error: "conceptId is required." });
       if (!roomAnalysis || typeof roomAnalysis !== "object") return send(res, 400, { error: "roomAnalysis is required. Generate the design before building its shopping plan." });
       const context = { budget, constraints, retainedItems, roomDimensions };
       log(`[shopping-plan ${conceptId}] ${style} ${conceptName} started`);
-      const brief = await buildConceptBrief(roomAnalysis, style, conceptName, context);
-      const items = await resolveShoppingItems({ ...roomAnalysis, shoppingItems: brief }, style, conceptId, context);
-      const unresolvedCount = items.filter(item => item.provenance !== "verified").length;
-      const projectedSpend = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-      log(`[shopping-plan ${conceptId}] ${items.length} items, ${unresolvedCount} unresolved, $${Math.round(projectedSpend)} in ${Math.round((Date.now() - started) / 1000)}s`);
-      send(res, 200, { conceptId, conceptName, items, resolvedAt: new Date().toISOString(), unresolvedCount, projectedSpend: Math.round(projectedSpend * 100) / 100 });
+      job = wantsJob ? startJob("Reading your design") : undefined;
+      if (job) send(res, 202, { jobId: job });
+      const run = async () => {
+        stage(job, "Choosing the pieces", `Working out what the ${conceptName} direction needs`);
+        const brief = await buildConceptBrief(roomAnalysis, style, conceptName, context);
+        stage(job, "Searching retailers", `Looking for ${brief.length} ${brief.length === 1 ? "piece" : "pieces"} on real product pages`);
+        const items = await resolveShoppingItems({ ...roomAnalysis, shoppingItems: brief }, style, conceptId, context);
+        stage(job, "Confirming prices", "Checking each price on the retailer's own page");
+        const unresolvedCount = items.filter(item => item.provenance !== "verified").length;
+        const projectedSpend = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+        log(`[shopping-plan ${conceptId}] ${items.length} items, ${unresolvedCount} unresolved, $${Math.round(projectedSpend)} in ${Math.round((Date.now() - started) / 1000)}s`);
+        return { conceptId, conceptName, items, resolvedAt: new Date().toISOString(), unresolvedCount, projectedSpend: Math.round(projectedSpend * 100) / 100 };
+      };
+      if (job) { run().then(result => finishJob(job, result)).catch(error => { log(`[shopping-plan] failed: ${error instanceof Error ? error.message : error}`); failJob(job, error); }); return; }
+      send(res, 200, await run());
     } catch (error) {
       log(`[shopping-plan] failed after ${Math.round((Date.now() - started) / 1000)}s: ${error instanceof Error ? error.message : error}`);
-      send(res, 500, { error: error instanceof Error ? error.message : "The shopping plan could not be built." });
+      if (job) return failJob(job, error);
+      if (!res.headersSent) send(res, 500, { error: error instanceof Error ? error.message : "The shopping plan could not be built." });
     }
   });
 }
@@ -592,9 +666,95 @@ function serveDesignImage(req, res) {
   res.writeHead(200, { "Content-Type": contentType, "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=31536000, immutable" });
   res.end(readFileSync(path));
 }
-function send(res, status, body) {
-  res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS" });
+// ── Job tracking ─────────────────────────────────────────────────────────────
+const jobs = new Map();
+const JOB_TTL_MS = 30 * 60 * 1000;
+
+function startJob(label) {
+  pruneJobs();
+  const id = randomUUID();
+  jobs.set(id, { id, stage: label, detail: "", startedAt: Date.now(), updatedAt: Date.now(), done: false });
+  return id;
+}
+function stage(id, label, detail = "") {
+  const job = id && jobs.get(id);
+  if (!job || job.done) return;
+  job.stage = label;
+  job.detail = detail;
+  job.updatedAt = Date.now();
+}
+function finishJob(id, result) {
+  const job = id && jobs.get(id);
+  if (!job) return;
+  Object.assign(job, { done: true, result, stage: "Done", detail: "", updatedAt: Date.now() });
+}
+function failJob(id, error) {
+  const job = id && jobs.get(id);
+  if (!job) return;
+  Object.assign(job, { done: true, error: error instanceof Error ? error.message : String(error), stage: "Failed", updatedAt: Date.now() });
+}
+function pruneJobs() {
+  const cutoff = Date.now() - JOB_TTL_MS;
+  for (const [id, job] of jobs) if (job.updatedAt < cutoff) jobs.delete(id);
+}
+function sendJobState(req, res) {
+  const id = basename(decodeURIComponent(req.url.slice("/api/jobs/".length).split("?")[0]));
+  const job = jobs.get(id);
+  if (!job) return send(res, 404, { error: "That job is no longer available. Start again." });
+  const { result, error, ...state } = job;
+  if (!job.done) return send(res, 200, { ...state, elapsedMs: Date.now() - job.startedAt });
+  if (error) return send(res, 200, { ...state, elapsedMs: Date.now() - job.startedAt, error });
+  return send(res, 200, { ...state, elapsedMs: Date.now() - job.startedAt, result });
+}
+
+// Behind a tunnel or a proxy the request arrives over http on the loopback but the client reached
+// us over https. Trust the forwarded scheme so generated image URLs are not mixed content.
+function publicBaseUrl(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] ?? "").split(",")[0].trim();
+  const host = forwardedHost || req.headers.host;
+  const protocol = forwardedProto || (process.env.ROOMMUSE_PUBLIC_SCHEME ?? "http");
+  return protocol + "://" + host;
+}
+function corsHeaders(req) {
+  const origin = req?.headers?.origin;
+  const allow = !allowedOrigins.length ? "*" : (origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0]);
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS",
+    ...(allowedOrigins.length ? { Vary: "Origin" } : {})
+  };
+}
+function send(res, status, body, req) {
+  res.writeHead(status, { "Content-Type": "application/json", ...corsHeaders(req) });
   res.end(JSON.stringify(body));
+}
+// Constant-time compare so a token cannot be recovered by timing. Never logged, anywhere.
+function tokenMatches(presented) {
+  if (!presented) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(apiToken);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+function authorized(req) {
+  if (!apiToken) return true;
+  const header = req.headers.authorization ?? "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  return tokenMatches(bearer || String(req.headers["x-roommuse-token"] ?? "").trim());
+}
+// A small per-IP budget on the routes that spend money. Enough headroom for a tester working
+// normally, low enough that a leaked URL cannot run up a bill unattended.
+const spendWindowMs = 60 * 60 * 1000;
+const spendLimit = Number(process.env.ROOMMUSE_HOURLY_LIMIT ?? 40);
+const spendLog = new Map();
+function withinRateLimit(req) {
+  const key = String(req.socket?.remoteAddress ?? "unknown");
+  const now = Date.now();
+  const hits = (spendLog.get(key) ?? []).filter(at => now - at < spendWindowMs);
+  hits.push(now);
+  spendLog.set(key, hits);
+  return hits.length <= spendLimit;
 }
 
 function projectPath(url) {
@@ -737,7 +897,7 @@ function handleIdentifyProductRequest(req, res) {
     try {
       const { imageBase64, style = "Modern", action = "replace", userNotes = "", userPrice, roomAnalysis, targetItem } = JSON.parse(raw);
       if (!imageBase64) return send(res, 400, { error: "A photo of the product is required." });
-      if (!apiKey) return send(res, 503, { error: "Product identification is not configured. Add OPENAI_API_KEY to the local .env file and restart the RoomMuse studio." });
+      if (!apiKey) return send(res, 503, { error: "Product identification is not configured. Add OPENAI_API_KEY to the local .env file and restart Tracy’s Room Muse." });
       const buffer = Buffer.from(imageBase64, "base64");
       const info = inputImageInfo(buffer);
       const schema = {
@@ -817,7 +977,7 @@ function handleRefineRequest(req, res) {
       log(`[refine ${id}] ${style} ${conceptName} started`);
       const rendered = await renderRoom([{ buffer: input, mime: info.mime }], style, conceptName, instructions);
       writeFileSync(join(storageDir, fileName), rendered);
-      const baseUrl = "http://" + req.headers.host;
+      const baseUrl = publicBaseUrl(req);
       log(`[refine ${id}] completed in ${Math.round((Date.now() - started) / 1000)}s`);
       send(res, 200, { imageDataUrl: baseUrl + "/designs/" + fileName, generatedAt: new Date().toISOString(), revisionSummary: String(instructions).trim().slice(0, 1000) });
     } catch (error) {
@@ -826,9 +986,14 @@ function handleRefineRequest(req, res) {
     }
   });
 }
+const aiRoutes = ["/api/design", "/api/shopping-plan", "/api/refine", "/api/prices/refresh", "/api/identify-product"];
 const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") return send(res, 204, {});
-  if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, ai: Boolean(apiKey) });
+  if (req.method === "OPTIONS") return send(res, 204, {}, req);
+  // /health stays open so a tester can confirm the studio is reachable before anything else.
+  if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, ai: Boolean(apiKey), auth: Boolean(apiToken) }, req);
+  if (req.url?.startsWith("/api/") && !authorized(req)) return send(res, 401, { error: "This studio requires an access token." }, req);
+  if (aiRoutes.includes(req.url ?? "") && !withinRateLimit(req)) return send(res, 429, { error: "Too many design requests from this device in the last hour. Try again later." }, req);
+  if (req.method === "GET" && req.url?.startsWith("/api/jobs/")) return sendJobState(req, res);
   if (req.method === "GET" && req.url?.startsWith("/designs/")) return serveDesignImage(req, res);
   if ((req.method === "GET" || req.method === "PUT") && req.url?.startsWith("/api/projects/")) return handleProjectRequest(req, res);
   if (req.method === "POST" && req.url === "/api/refine") return handleRefineRequest(req, res);
@@ -844,8 +1009,10 @@ const server = http.createServer(async (req, res) => {
     log(`[upload] received ${raw.length} bytes`);
     if (tooLarge) return send(res, 413, { error: "The room scan is too large. Retake it and try again." });
     let beforePath;
+    // Declared outside the try so the catch can fail the job rather than leave a poller waiting.
+    let job;
     try {
-      const { imageBase64, imageBase64s = [], style = "Modern", budget, constraints, retainedItems, roomDimensions } = JSON.parse(raw);
+      const { imageBase64, imageBase64s = [], style = "Modern", budget, constraints, retainedItems, roomDimensions, async: wantsJob } = JSON.parse(raw);
       const context = { budget, constraints, retainedItems, roomDimensions };
       const encodedScans = (Array.isArray(imageBase64s) && imageBase64s.length ? imageBase64s : [imageBase64]).filter(Boolean).slice(0, 3);
       if (!encodedScans.length) return send(res, 400, { error: "At least one room image is required" });
@@ -859,14 +1026,19 @@ const server = http.createServer(async (req, res) => {
       writeFileSync(beforePath, input);
       log("[design " + id + "] " + style + " started");
       const conceptNames = ["Signature", "Refined", "Expressive"];
-      const roomAnalysisPromise = analyzeRoom(input, info.mime, style, scans.slice(1), context);
-      const renderPromise = Promise.allSettled(conceptNames.map(conceptName => renderRoom(scans, style, conceptName)));
-      const shoppingPromise = roomAnalysisPromise.then(analysis => resolveShoppingItems(analysis, style, id, context));
-      const [roomAnalysis, renderResults, shoppingItems] = await Promise.all([roomAnalysisPromise, renderPromise, shoppingPromise]);
+      job = wantsJob ? startJob("Reading the room") : undefined;
+      if (job) send(res, 202, { jobId: job });
+      const roomAnalysisPromise = analyzeRoom(input, info.mime, style, scans.slice(1), context)
+        .then(analysis => { stage(job, "Planning the layout", `Understood the ${analysis.roomType ?? "room"}; the three directions are rendering`); return analysis; });
+      let rendered = 0;
+      const renderPromise = Promise.allSettled(conceptNames.map(conceptName =>
+        renderRoom(scans, style, conceptName).finally(() => { rendered += 1; stage(job, "Rendering your room", `${rendered} of ${conceptNames.length} directions complete`); })));
+      const [roomAnalysis, renderResults] = await Promise.all([roomAnalysisPromise, renderPromise]);
+      const shoppingItems = briefItems(roomAnalysis, style, id);
       const primary = renderResults[0];
       if (!primary || primary.status === "rejected") throw primary?.reason ?? new Error("The primary design render failed.");
       writeFileSync(join(storageDir, afterName), primary.value);
-      const baseUrl = "http://" + req.headers.host;
+      const baseUrl = publicBaseUrl(req);
       const signatureUrl = baseUrl + "/designs/" + afterName;
       const variants = conceptNames.slice(1).map((conceptName, index) => {
         const result = renderResults[index + 1];
@@ -878,22 +1050,23 @@ const server = http.createServer(async (req, res) => {
         log(`[design ${id}] ${conceptName} render failed: ${result?.reason instanceof Error ? result.reason.message : result?.reason}`);
         return { conceptName, imageDataUrl: signatureUrl, designReport: buildDesignReport(roomAnalysis, style, conceptName), generationStatus: "partial", fallbackReason: "Secondary render unavailable; showing the generated Signature image until this direction is refined." };
       });
-      log("[design " + id + "] completed in " + Math.round((Date.now() - started) / 1000) + "s with " + shoppingItems.length + " room-grounded shopping items");
-      send(res, 200, concept(
-        style,
-        id,
-        baseUrl + "/designs/" + beforeName,
-        signatureUrl,
-        roomAnalysis,
-        shoppingItems,
-        variants
-      ));
+      log("[design " + id + "] completed in " + Math.round((Date.now() - started) / 1000) + "s with " + shoppingItems.length + " room-grounded pieces (not yet sourced)");
+      const payload = concept(style, id, baseUrl + "/designs/" + beforeName, signatureUrl, roomAnalysis, shoppingItems, variants);
+      if (job) return finishJob(job, payload);
+      send(res, 200, payload);
     } catch (error) {
       if (beforePath && existsSync(beforePath)) unlinkSync(beforePath);
       log(`[design] failed after ${Math.round((Date.now() - started) / 1000)}s: ${error instanceof Error ? error.message : error}`);
-      send(res, 500, { error: error instanceof Error ? error.message : "Design failed" });
+      if (job) return failJob(job, error);
+      if (!res.headersSent) send(res, 500, { error: error instanceof Error ? error.message : "Design failed" });
     }
   });
 });
 
-server.listen(port, "0.0.0.0", () => log(`RoomMuse studio listening on http://0.0.0.0:${port} (${apiKey ? "AI enabled" : "demo mode"})`));
+server.listen(port, "0.0.0.0", () => {
+  log(`RoomMuse studio listening on http://0.0.0.0:${port} (${apiKey ? "AI enabled" : "demo mode"})`);
+  // Stated plainly at startup: an open studio on a LAN is fine, an open studio on a tunnel is not.
+  log(apiToken
+    ? "Access token required on every /api route."
+    : "NO ACCESS TOKEN SET - every /api route is open to anyone who can reach this port. Set ROOMMUSE_API_TOKEN before exposing it beyond your own network.");
+});

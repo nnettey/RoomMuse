@@ -1,7 +1,11 @@
 param(
   [switch]$Tunnel,
   [switch]$NoServer,
-  [switch]$NoExpo
+  [switch]$NoExpo,
+  # Public HTTPS origin for the API, e.g. https://something.trycloudflare.com. Required with
+  # -Tunnel: without it a remote tester loads the app and then fails every request, because
+  # EXPO_PUBLIC_API_URL would still point at a private LAN address.
+  [string]$ApiPublicUrl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,10 +129,44 @@ if ($configuredApiBaseUrl -and $configuredApiBaseUrl -notmatch 'YOUR_COMPUTER_LA
   $apiBaseUrl = "http://$wifiIp`:$apiPort"
   $apiBaseUrlSource = 'detected Wi-Fi address'
 }
+if ($Tunnel) {
+  if (-not $ApiPublicUrl) {
+    Write-Host ''
+    Write-Host 'Tunnel mode needs a public HTTPS address for the API.' -ForegroundColor Yellow
+    Write-Host 'In a second terminal, expose the API and pass the URL back in:' -ForegroundColor Yellow
+    Write-Host "  cloudflared tunnel --url http://localhost:$apiPort" -ForegroundColor Yellow
+    Write-Host '  # then re-run this script with the https URL it prints:' -ForegroundColor Yellow
+    Write-Host '  ... -Tunnel -ApiPublicUrl https://<name>.trycloudflare.com' -ForegroundColor Yellow
+    throw 'ApiPublicUrl is required with -Tunnel.'
+  }
+  $apiBaseUrl = $ApiPublicUrl.TrimEnd('/')
+  $apiBaseUrlSource = '-ApiPublicUrl (tunnel)'
+  if ($apiBaseUrl -notmatch '^https://') {
+    Write-Host 'WARNING: the API address is not https. Camera capture and sharing do not work in a phone browser without it, and the app will be served mixed content.' -ForegroundColor Yellow
+  }
+}
+
 $env:EXPO_PUBLIC_API_URL = $apiBaseUrl
 $env:ROOMMUSE_LAN_HOSTNAME = $lanHostName
 $env:ROOMMUSE_LAN_IP = $wifiIp
 $env:ROOMMUSE_WEB_PORT = [string]$expoPort
+
+# The shared secret this build presents to the studio. Read from .env so it is never on a command
+# line or in shell history, and never printed.
+$apiToken = Get-DotEnvValue -Path $envFile -Name 'ROOMMUSE_API_TOKEN'
+if ($apiToken) {
+  $env:EXPO_PUBLIC_API_TOKEN = $apiToken
+  Write-Host 'Access token: loaded from .env and baked into this build'
+} elseif ($Tunnel) {
+  Write-Host ''
+  Write-Host 'REFUSING to tunnel an unauthenticated studio.' -ForegroundColor Red
+  Write-Host 'This server holds your OpenAI key and has no authentication of its own, so a public URL is an open proxy that anyone who finds it can spend against.' -ForegroundColor Red
+  Write-Host 'Add a long random value to .env, then run this again:' -ForegroundColor Red
+  Write-Host '  ROOMMUSE_API_TOKEN=<a long random string>' -ForegroundColor Red
+  throw 'ROOMMUSE_API_TOKEN must be set before exposing the studio.'
+} else {
+  Write-Host 'Access token: none set - fine on your own network, required before tunnelling'
+}
 
 $expoUrl = if ($Tunnel) { 'Expo tunnel mode - use the Expo CLI output QR/link' } else { "exp://$wifiIp`:$expoPort" }
 $apiUrl = "$apiBaseUrl/health"
