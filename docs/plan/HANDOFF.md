@@ -33,9 +33,9 @@ No database, no framework. AsyncStorage on device plus JSON files on the server.
 
 | | |
 |---|---|
-| Repo root | `C:\Data\LocalNettCreative\Claude_RoomMuse\RoomMuse` (the outer folder is **not** a repo) |
-| Trunk | `codex/sibling-roommuse-preservation` at `8106182` — **all v2 work is merged and pushed** |
-| Remote | `https://github.com/nnettey/RoomMuse.git` — in sync |
+| Repo root | `C:\Users\nnett\OneDrive\Documents\RoomMuse` (standalone RoomMuse repository) |
+| Trunk | `codex/sibling-roommuse-preservation` — v2, reconciled `main` history, and LAN access are unified |
+| Remote | `https://github.com/nnettey/RoomMuse.git` — trunk and `main` are promoted together after validation |
 | Rollback | tag `baseline/pre-v2` (`2379fb2`), pushed |
 | v2 history | `roommuse-v2/integration` and `ws/*` branches remain locally for archaeology; all merged |
 
@@ -50,7 +50,7 @@ npm run typecheck && npm run test:unit && npm run test:e2e
 | Gate | Before v2 | Now |
 |---|---|---|
 | `typecheck` | clean | clean |
-| `test:unit` | 11 pass | **70 pass** across 5 files |
+| `test:unit` | 11 pass | **71 pass** across 5 files |
 | `test:e2e` | **6 failed / 3 passed** | **15 pass** |
 | `test:visual` | not run | **stale — see G2** |
 
@@ -340,11 +340,12 @@ wait *informative* rather than shorter. Both are legitimate — get direction fi
 ## 8. Running it
 
 ```bash
-powershell -ExecutionPolicy Bypass -File "C:\Data\LocalNettCreative\Claude_RoomMuse\RoomMuse\scripts\start-roommuse.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\Users\nnett\OneDrive\Documents\RoomMuse\scripts\start-roommuse.ps1"
 ```
 
-Starts the API and Expo, derives the LAN URL from the Wi-Fi address, and prints the `exp://` link for
-Expo Go. `.env` holds `OPENAI_API_KEY` and is gitignored — **never** commit it or echo its contents.
+Starts the API and Expo, derives the API address from the current Wi-Fi adapter, advertises
+`roommuse.local` over mDNS, and prints both friendly and IP-fallback URLs. `.env` holds
+`OPENAI_API_KEY` and is gitignored — **never** commit it or echo its contents.
 Confirm `GET /health` returns `{"ok":true,"ai":true}` before blaming the app for missing products.
 
 Tests: `npm run typecheck`, `npm run test:unit`, `npm run test:e2e`, `npm run test:visual`.

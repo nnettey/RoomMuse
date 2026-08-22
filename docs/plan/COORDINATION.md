@@ -1,5 +1,18 @@
 # Room Muse v2 — Shared Coordination State
 
+## 2026-08-22 repository reconciliation
+
+- Unified the remote `main` commit and the completed v2 work without reverting v2's newer server,
+  domain, persistence, or UI implementations.
+- Preserved the earlier LAN work on `codex/roommuse-lan-backup`, then reimplemented the applicable
+  pieces on v2: `roommuse.local` mDNS advertising, IP fallbacks, stale-private-IP detection, and a
+  compatible Node runtime check.
+- Intentionally did not activate the old unauthenticated public Expo/API tunnel from `main`; it used
+  superseded ports and would violate the unresolved F21 security requirement. Its commit remains in
+  history for reference.
+- Post-integration gates: typecheck clean, 71 unit tests passing, web export clean, and 15 e2e tests
+  passing. Live LAN verification is required whenever the host network changes.
+
 **This is the single source of shared truth for all implementation agents/sessions.**
 
 Rules:
