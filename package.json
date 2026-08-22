@@ -9,6 +9,7 @@
   "scripts": {
     "start": "expo start",
     "start:tunnel": "expo start --tunnel",
+    "lan:name": "node scripts/advertise-roommuse.mjs",
     "typecheck": "tsc --noEmit",
     "server": "node server/server.mjs",
     "test": "npm run test:unit",
@@ -30,6 +31,7 @@
     "expo-linear-gradient": "~15.0.0",
     "expo-status-bar": "~3.0.0",
     "expo-video-thumbnails": "~10.0.8",
+    "multicast-dns": "^7.2.5",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.4",
