@@ -143,7 +143,7 @@ async function resolveProductBatch(entries, style) {
       headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(30000),
       body: JSON.stringify({
-        model: process.env.OPENAI_PRODUCT_SEARCH_MODEL ?? "gpt-4o-mini-search-preview",
+        model: process.env.OPENAI_PRODUCT_SEARCH_MODEL ?? "gpt-5-search-api",
         web_search_options: { search_context_size: "medium", user_location: { type: "approximate", approximate: { country: "US" } } },
         messages: [{ role: "user", content: `Today is ${new Date().toISOString().slice(0, 10)}. Find currently purchasable products matching EACH request below for a ${style} room design. Requests: ${JSON.stringify(entries.map(({ requestIndex, raw }) => ({ requestIndex, name: raw.name, category: raw.category, description: raw.description, dimensions: raw.dimensions, finish: raw.finish })))}. Use only these retailers: ${retailerDomains.join(", ")}. Preserve each requestIndex. For each request, find up to three distinct save, balanced, and invest choices when available. State requestIndex, tier, exact product name, retailer, exact product-page URL, current listed USD price, and availability. Cite the exact retailer product page for every product and price. Never use search/category pages, estimates, MSRP substitutions, unrelated products, or uncited claims.` }]
       })

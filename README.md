@@ -12,7 +12,19 @@ Use the dedicated startup script from the repository root:
 powershell -ExecutionPolicy Bypass -File .\scripts\start-roommuse.ps1
 ```
 
-That script starts the RoomMuse API plus Expo/Metro, then prints the URLs you can use on PC, Mac, iPhone, and iPad.
+That script starts the RoomMuse API plus Expo/Metro and advertises a stable mDNS name on the local network. Users connected to the same Wi-Fi can use:
+
+```text
+http://roommuse.local:8081
+```
+
+For native camera testing in Expo Go, use:
+
+```text
+exp://roommuse.local:8081
+```
+
+The startup output also prints the current IP-based URLs as fallbacks for networks that block multicast DNS. No router or per-device hosts-file changes are required on networks that permit standard mDNS traffic.
 
 If you want tunnel mode instead of LAN mode:
 
@@ -32,7 +44,7 @@ This first build uses Expo Go so it can be tested from Windows without Xcode or 
    powershell -ExecutionPolicy Bypass -File .\scripts\start-roommuse.ps1
    ```
 
-4. In Expo Go, open the `exp://...` URL printed by the startup script. Use this native Expo URL for camera and video testing; the plain `http://...` web URL is intended for desktop viewing and mobile browsers may block camera access on non-HTTPS LAN pages.
+4. In Expo Go, open `exp://roommuse.local:8081`. Use this native Expo URL for camera and video testing; the plain `http://roommuse.local:8081` web URL is intended for desktop viewing and mobile browsers may block camera access on non-HTTPS LAN pages.
 5. If local-network discovery is blocked, rerun the script with `-Tunnel` and use the tunnel link printed by Expo.
 
 Camera capture and the interface can be explored without an API key, but demo projects use clearly non-personalized sample data. A room-grounded design and shopping list require the local AI server configured below.

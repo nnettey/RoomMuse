@@ -65,9 +65,17 @@ $wifiIp = Get-PrimaryWifiIPv4
 $expoPort = 8081
 $apiPort = [int]$env:ROOMMUSE_API_PORT
 if (-not $apiPort) { $apiPort = 3201 }
+$lanHostName = 'roommuse.local'
+$apiBaseUrl = "http://$wifiIp`:$apiPort"
+$env:EXPO_PUBLIC_API_URL = $apiBaseUrl
+$env:ROOMMUSE_LAN_HOSTNAME = $lanHostName
+$env:ROOMMUSE_LAN_IP = $wifiIp
+$env:ROOMMUSE_WEB_PORT = [string]$expoPort
 $expoUrl = if ($Tunnel) { 'Expo tunnel mode - use the Expo CLI output QR/link' } else { "exp://$wifiIp`:$expoPort" }
-$apiUrl = "http://$wifiIp`:$apiPort/health"
+$apiUrl = "$apiBaseUrl/health"
 $webUrl = "http://$wifiIp`:$expoPort"
+$friendlyExpoUrl = "exp://$lanHostName`:$expoPort"
+$friendlyWebUrl = "http://$lanHostName`:$expoPort"
 
 $startedServer = $false
 $startedExpo = $false
@@ -92,12 +100,45 @@ if (-not $NoExpo) {
     $startedExpo = $true
   }
   Wait-ForHealth -Url $webUrl -TimeoutSeconds 180 -Name 'Expo/Metro'
+
+  $mdnsScript = Join-Path $repoRoot 'scripts\advertise-roommuse.mjs'
+  $mdnsStatePath = Join-Path $repoRoot '.expo\roommuse-mdns.json'
+  if (Test-Path $mdnsStatePath) {
+    try {
+      $mdnsState = Get-Content -LiteralPath $mdnsStatePath -Raw | ConvertFrom-Json
+      $mdnsProcess = Get-Process -Id ([int]$mdnsState.pid) -ErrorAction SilentlyContinue
+      $recordedStart = [DateTimeOffset]::Parse([string]$mdnsState.startedAt).UtcDateTime
+      $sameProcess = $mdnsProcess -and $mdnsProcess.ProcessName -eq 'node' -and [Math]::Abs(($mdnsProcess.StartTime.ToUniversalTime() - $recordedStart).TotalSeconds) -lt 1
+      if (-not $sameProcess) {
+        $mdnsProcess = $null
+      } elseif ([string]$mdnsState.address -ne $wifiIp -or [string]$mdnsState.hostname -ne $lanHostName) {
+        Stop-Process -Id $mdnsProcess.Id -Force
+        $mdnsProcess = $null
+      }
+    } catch {
+      $mdnsProcess = $null
+    }
+  }
+  if (-not $mdnsProcess) {
+    $nodePath = (Get-Command node.exe -ErrorAction Stop).Source
+    $mdnsOut = Join-Path $repoRoot 'logs\mdns.out.log'
+    $mdnsErr = Join-Path $repoRoot 'logs\mdns.err.log'
+    $mdnsProcess = Start-Process -FilePath $nodePath -ArgumentList @("`"$mdnsScript`"") -WorkingDirectory $repoRoot -RedirectStandardOutput $mdnsOut -RedirectStandardError $mdnsErr -WindowStyle Hidden -PassThru
+    $mdnsState = @{ pid = $mdnsProcess.Id; startedAt = $mdnsProcess.StartTime.ToString('o'); address = $wifiIp; hostname = $lanHostName }
+    $mdnsState | ConvertTo-Json -Compress | Set-Content -LiteralPath $mdnsStatePath
+    Start-Sleep -Milliseconds 800
+    if ($mdnsProcess.HasExited) {
+      $mdnsError = Get-Content -LiteralPath $mdnsErr -Raw -ErrorAction SilentlyContinue
+      throw "RoomMuse LAN name could not start. $mdnsError"
+    }
+  }
 }
 
 Write-Host ''
 Write-Host 'RoomMuse startup complete' -ForegroundColor Green
 Write-Host "Repo: $repoRoot"
 Write-Host "Wi-Fi IP: $wifiIp"
+Write-Host "App API URL: $apiBaseUrl"
 if (-not $NoServer) {
   Write-Host "API health URL: $apiUrl"
   Write-Host ("API server: " + $(if ($startedServer) { 'started' } else { 'reused existing listener' }))
@@ -110,8 +151,10 @@ if ($NoExpo) {
     Write-Host 'Expo URL: Expo tunnel mode - use the QR/link printed by Expo'
     Write-Host "Web URL: $webUrl"
   } else {
-    Write-Host "Expo URL: $expoUrl"
-    Write-Host "Web URL: $webUrl"
+    Write-Host "Friendly Expo URL: $friendlyExpoUrl"
+    Write-Host "Friendly Web URL: $friendlyWebUrl" -ForegroundColor Cyan
+    Write-Host "IP fallback Expo URL: $expoUrl"
+    Write-Host "IP fallback Web URL: $webUrl"
   }
 }
 Write-Host ''
